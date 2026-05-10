@@ -13,9 +13,6 @@ import {
 import { PageBreadcrumbsBar, PageHeroBadge, PageHeroShell } from './PageChrome';
 import { CockpitControlCards } from './CockpitControlCards';
 import { DefiPositionsSection } from './DefiPositionsSection';
-import { HorizonLineSection } from './HorizonLineSection';
-import { ManifestSection } from './ManifestSection';
-import { SuiFundDashboard } from './SuiFundDashboard';
 
 type PortfolioBlockBoundaryProps = {
   children: React.ReactNode;
@@ -84,7 +81,6 @@ export function PortfolioPage() {
     />
   );
   const defi = <DefiPositionsSection portfolioNetwork={headerNetwork} />;
-  const isSuiPortfolio = headerNetwork === 'sui';
 
   return (
     <main className="relative min-h-[calc(100vh-160px)] pb-14 pt-14">
@@ -106,33 +102,6 @@ export function PortfolioPage() {
         subtitle={messages.portfolio.subtitle}
         belowIntro={
           <div className="space-y-6">
-            {isSuiPortfolio ? (
-              <>
-                <PortfolioBlockBoundary
-                  title={messages.portfolio.sectionTitle}
-                  unavailableLabel={messages.app.sectionUnavailable}
-                  runtimeErrorLabel={messages.app.runtimeError}
-                >
-                  <HorizonLineSection />
-                </PortfolioBlockBoundary>
-                <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
-                  <PortfolioBlockBoundary
-                    title={messages.portfolio.manifestTitle}
-                    unavailableLabel={messages.app.sectionUnavailable}
-                    runtimeErrorLabel={messages.app.runtimeError}
-                  >
-                    <ManifestSection />
-                  </PortfolioBlockBoundary>
-                  <PortfolioBlockBoundary
-                    title={messages.invest.cockpitTitle}
-                    unavailableLabel={messages.app.sectionUnavailable}
-                    runtimeErrorLabel={messages.app.runtimeError}
-                  >
-                    <SuiFundDashboard asPage omitIntro />
-                  </PortfolioBlockBoundary>
-                </div>
-              </>
-            ) : null}
             <PortfolioBlockBoundary
               title={messages.portfolio.commandRoutes}
               unavailableLabel={messages.app.sectionUnavailable}

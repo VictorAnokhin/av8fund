@@ -24,14 +24,14 @@ export function InvestPage() {
         subtitle={messages.invest.pageHeroSubtitle}
         subtitleClassName="max-w-3xl text-lg leading-relaxed text-slate-400"
       />
-      <InvestmentSection asPage omitIntro />
 
       <section className="px-6 py-10">
-        <div className="mx-auto max-w-7xl">
+        <div className="mx-auto max-w-7xl space-y-6">
           <HorizonLineSection />
 
-          <div className="mt-6">
+          <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
             <ManifestSection />
+            <InvestmentSection asPage omitIntro />
           </div>
         </div>
       </section>
