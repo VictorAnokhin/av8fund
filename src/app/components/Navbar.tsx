@@ -946,14 +946,26 @@ export function Navbar({ project, currentPage = 'home' }: NavbarProps) {
                 Google
               </div>
 
-              <div className="flex min-h-10 w-full items-center">
-                {externalPending === 'google-identity' || isGoogleIdentityButtonLoading ? (
-                  <LoaderCircle className="mr-3 h-4 w-4 animate-spin text-sky-200" />
-                ) : null}
-                <div
-                  ref={googleIdentityButtonRef}
-                  className={`min-h-10 w-full max-w-[360px] ${externalPending !== null ? 'pointer-events-none opacity-60' : ''}`}
-                />
+              <div className="w-full max-w-[392px] rounded-[1.25rem] border border-sky-300/20 bg-[linear-gradient(135deg,rgba(14,165,233,0.18),rgba(15,23,42,0.9)_42%,rgba(16,185,129,0.12))] p-[1px] shadow-[0_18px_50px_rgba(14,165,233,0.12)]">
+                <div className="flex min-h-[58px] w-full items-center gap-3 rounded-[1.2rem] bg-slate-950/90 px-3 py-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-sky-100">
+                    <Shield className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-2 text-[11px] font-semibold uppercase text-sky-100/60">
+                      Secure Google sign-in
+                    </div>
+                    <div className="flex min-h-10 w-full items-center">
+                      {externalPending === 'google-identity' || isGoogleIdentityButtonLoading ? (
+                        <LoaderCircle className="mr-3 h-4 w-4 shrink-0 animate-spin text-sky-200" />
+                      ) : null}
+                      <div
+                        ref={googleIdentityButtonRef}
+                        className={`min-h-10 w-full ${externalPending !== null ? 'pointer-events-none opacity-60' : ''}`}
+                      />
+                    </div>
+                  </div>
+                </div>
               </div>
 
               {hasIdentitySession ? (

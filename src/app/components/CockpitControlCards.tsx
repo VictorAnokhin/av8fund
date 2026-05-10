@@ -3342,12 +3342,21 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
                 {messages.hero.zkLoginWriteHint}
               </DialogDescription>
             </DialogHeader>
-            <div className="mt-6 flex min-h-[52px] w-full items-center gap-3">
+            <div className="mt-6 w-full rounded-[1.25rem] border border-sky-300/20 bg-[linear-gradient(135deg,rgba(14,165,233,0.18),rgba(15,23,42,0.94)_42%,rgba(16,185,129,0.12))] p-[1px] shadow-[0_18px_50px_rgba(14,165,233,0.12)]">
+              <div className="flex min-h-[64px] w-full items-center gap-3 rounded-[1.2rem] bg-slate-950/90 px-3 py-3">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.04] text-sky-100">
+                  <Wallet className="h-4 w-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="mb-2 text-[11px] font-semibold uppercase text-sky-100/60">
+                    Google zkLogin
+                  </div>
+                  <div className="flex min-h-[42px] w-full items-center gap-3">
               {SUI_GOOGLE_CLIENT_ID ? (
                 <div
                   ref={zkLoginAssistGoogleRef}
                   className={cn(
-                    'flex min-h-10 min-w-[280px] w-full flex-1 flex-col items-stretch justify-center',
+                    'flex min-h-10 min-w-[240px] w-full flex-1 flex-col items-stretch justify-center',
                     googleZkButtonHostBlocked && 'pointer-events-none opacity-60',
                   )}
                 />
@@ -3357,6 +3366,9 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
               {externalPending === 'google-sui' || isGoogleSuiButtonLoading ? (
                 <LoaderCircle className="h-5 w-5 shrink-0 animate-spin text-sky-200" />
               ) : null}
+                  </div>
+                </div>
+              </div>
             </div>
             {externalError ? (
               <div className="mt-4 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
@@ -3563,7 +3575,7 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
 
                 <div className="space-y-3">
                   {networkFamily === 'sui' ? (
-                    <div className="rounded-[1.5rem] border border-sky-400/20 bg-sky-400/10 px-4 py-4 text-white">
+                    <div className="rounded-[1.5rem] border border-sky-400/20 bg-[linear-gradient(135deg,rgba(14,165,233,0.16),rgba(15,23,42,0.72)_52%,rgba(16,185,129,0.12))] px-4 py-4 text-white shadow-[0_18px_45px_rgba(14,165,233,0.1)]">
                       <div className="mb-3 flex items-center justify-between gap-3">
                         <span>
                           <span className="block text-xs uppercase tracking-[0.16em] text-sky-100/70">{messages.hero.connectZkLogin}</span>
@@ -3576,13 +3588,19 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
                         ) : null}
                       </div>
                       {SUI_GOOGLE_CLIENT_ID ? (
-                        <div
-                          ref={googleSuiButtonRef}
-                          className={cn(
-                            'min-h-10 min-w-[280px] w-full',
-                            googleZkButtonHostBlocked && 'pointer-events-none opacity-60',
-                          )}
-                        />
+                        <div className="rounded-[1.25rem] border border-sky-300/20 bg-slate-950/75 p-3">
+                          <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase text-sky-100/60">
+                            <Wallet className="h-3.5 w-3.5" />
+                            Google zkLogin
+                          </div>
+                          <div
+                            ref={googleSuiButtonRef}
+                            className={cn(
+                              'min-h-10 min-w-[240px] w-full',
+                              googleZkButtonHostBlocked && 'pointer-events-none opacity-60',
+                            )}
+                          />
+                        </div>
                       ) : null}
                     </div>
                   ) : null}
