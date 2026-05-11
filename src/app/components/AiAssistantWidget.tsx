@@ -103,7 +103,7 @@ export function AiAssistantWidget({ currentPage }: AiAssistantWidgetProps) {
               </div>
               <div>
                 <div className="text-sm font-semibold text-white">AV8 AI консультант</div>
-                <div className="text-xs text-slate-500">Atoma Network</div>
+                <div className="text-xs text-slate-500">OpenAI</div>
               </div>
             </div>
             <button
@@ -132,7 +132,7 @@ export function AiAssistantWidget({ currentPage }: AiAssistantWidgetProps) {
             {busy ? (
               <div className="mr-8 inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.05] px-4 py-3 text-sm text-slate-300">
                 <Loader2 className="h-4 w-4 animate-spin" />
-                Atoma отвечает...
+                OpenAI отвечает...
               </div>
             ) : null}
           </div>
