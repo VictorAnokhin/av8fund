@@ -2,6 +2,7 @@ import React from 'react';
 import { Navbar } from './components/Navbar';
 import { Hero } from './components/Hero';
 import { Analytics } from './components/Analytics';
+import { AiAssistantWidget } from './components/AiAssistantWidget';
 import { Footer } from './components/Footer';
 import { Breadcrumbs } from './components/Breadcrumbs';
 import { LandingLinksDeck } from './components/LandingLinksDeck';
@@ -14,6 +15,8 @@ const SwapPage = React.lazy(() => import('./components/SwapPage').then((module) 
 const MintPage = React.lazy(() => import('./components/MintPage').then((module) => ({ default: module.MintPage })));
 const InvestPage = React.lazy(() => import('./components/InvestPage').then((module) => ({ default: module.InvestPage })));
 const PortfolioPage = React.lazy(() => import('./components/PortfolioPage').then((module) => ({ default: module.PortfolioPage })));
+const FundAccountsPage = React.lazy(() => import('./components/FundAccountsPage').then((module) => ({ default: module.FundAccountsPage })));
+const FundBasketPage = React.lazy(() => import('./components/FundBasketPage').then((module) => ({ default: module.FundBasketPage })));
 const WhitepaperPage = React.lazy(() => import('./components/WhitepaperPage').then((module) => ({ default: module.WhitepaperPage })));
 const PrivacyPolicyPage = React.lazy(() => import('./components/PrivacyPolicyPage').then((module) => ({ default: module.PrivacyPolicyPage })));
 const KycAmlPage = React.lazy(() => import('./components/KycAmlPage').then((module) => ({ default: module.KycAmlPage })));
@@ -29,6 +32,8 @@ type AppRoute =
   | { page: 'mint' }
   | { page: 'invest' }
   | { page: 'portfolio' }
+  | { page: 'fund-accounts' }
+  | { page: 'fund-basket' }
   | { page: 'about' }
   | { page: 'whitepaper' }
   | { page: 'privacy-policy' }
@@ -66,6 +71,14 @@ function resolveRoute(): AppRoute {
 
   if (normalizedPathname.endsWith('/portfolio')) {
     return { page: 'portfolio' };
+  }
+
+  if (normalizedPathname.endsWith('/fund-accounts')) {
+    return { page: 'fund-accounts' };
+  }
+
+  if (normalizedPathname.endsWith('/fund-basket')) {
+    return { page: 'fund-basket' };
   }
 
   if (normalizedPathname.endsWith('/about')) {
@@ -202,6 +215,10 @@ export default function App() {
               ? messages.invest.pageTitle
               : route.page === 'portfolio'
                 ? messages.portfolio.pageTitle
+              : route.page === 'fund-accounts'
+                ? 'Fund accounts'
+              : route.page === 'fund-basket'
+                ? 'Fund basket'
               : route.page === 'about'
                 ? messages.navbar.aboutProject
               : route.page === 'whitepaper'
@@ -294,6 +311,10 @@ export default function App() {
             >
               <PortfolioPage />
             </SectionBoundary>
+          ) : route.page === 'fund-accounts' ? (
+            <FundAccountsPage />
+          ) : route.page === 'fund-basket' ? (
+            <FundBasketPage />
           ) : route.page === 'about' ? (
             <AboutPage project={localizedProject} />
           ) : route.page === 'whitepaper' ? (
@@ -312,6 +333,7 @@ export default function App() {
         </React.Suspense>
       )}
       <Footer project={localizedProject} currentPage={route.page} />
+      <AiAssistantWidget currentPage={route.page} />
     </div>
   );
 }

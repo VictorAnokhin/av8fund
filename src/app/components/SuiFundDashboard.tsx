@@ -17,6 +17,8 @@ import { cn } from '../utils';
 type SuiFundDashboardProps = {
   asPage?: boolean;
   omitIntro?: boolean;
+  hideDepositPanel?: boolean;
+  hideAiLogPanel?: boolean;
 };
 
 function formatCurrency(value: number): string {
@@ -74,7 +76,103 @@ function formatAiLogStatus(
   return inv.aiStatusPending;
 }
 
-export function SuiFundDashboard({ asPage = false, omitIntro = false }: SuiFundDashboardProps) {
+function AiFlightLogPanel({
+  snapshot,
+  inv,
+}: {
+  snapshot: ReturnType<typeof useSuiFundDashboard>['snapshot'];
+  inv: ReturnType<typeof useI18n>['messages']['invest'];
+}) {
+  return (
+    <div className="rounded-[2rem] border border-white/10 bg-white/[0.045] p-6 backdrop-blur-2xl">
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <div className="text-sm uppercase tracking-[0.18em] text-slate-400">{inv.aiLogTitle}</div>
+          <div className="mt-2 text-2xl font-semibold text-white">{inv.aiLogSubtitle}</div>
+        </div>
+        <div className="rounded-full border border-fuchsia-400/20 bg-fuchsia-400/10 px-3 py-1 text-xs uppercase tracking-[0.14em] text-fuchsia-200">
+          {inv.trustLayerBadge}
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        {snapshot.aiLogs.map((entry) => (
+          <motion.div
+            key={entry.id}
+            whileHover={{ x: 4 }}
+            className="rounded-[1.5rem] border border-white/[0.09] bg-[rgba(5,9,18,0.68)] p-4 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-sm"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="mt-1 rounded-full bg-white/8 p-2">
+                  <CircleDot className="h-4 w-4 text-teal-300/90" />
+                </div>
+                <div>
+                  <div className="text-xs uppercase tracking-[0.18em] text-slate-500">{entry.timestampLabel}</div>
+                  <div className="mt-1 text-lg font-semibold text-white">{entry.title}</div>
+                </div>
+              </div>
+              <div
+                className={cn(
+                  'rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em]',
+                  entry.status === 'verified'
+                    ? 'bg-emerald-500/15 text-emerald-300'
+                    : entry.status === 'failed'
+                      ? 'bg-rose-500/15 text-rose-300'
+                      : 'bg-amber-500/15 text-amber-300',
+                )}
+              >
+                {formatAiLogStatus(entry.status, inv)}
+              </div>
+            </div>
+
+            <p className="mt-3 text-sm leading-6 text-slate-400">{entry.summary}</p>
+
+            <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
+              <span>
+                {entry.txDigest
+                  ? `${inv.digestPrefix} ${entry.txDigest.slice(0, 12)}`
+                  : inv.digestPending}
+              </span>
+              <span>{inv.aiPilotTrace}</span>
+            </div>
+          </motion.div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function AiFlightLogSection() {
+  const { messages } = useI18n();
+  const inv = messages.invest;
+  const { snapshot, isLoading, error } = useSuiFundDashboard();
+
+  return (
+    <div>
+      <AiFlightLogPanel snapshot={snapshot} inv={inv} />
+      <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
+        {error ? (
+          <div className="rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1.5 text-amber-200">
+            {inv.rpcNoticePrefix}: {error}
+          </div>
+        ) : null}
+        {isLoading ? (
+          <div className="rounded-full border border-teal-500/22 bg-teal-500/10 px-3 py-1.5 text-teal-200/90">
+            {inv.refreshingSui}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+export function SuiFundDashboard({
+  asPage = false,
+  omitIntro = false,
+  hideDepositPanel = false,
+  hideAiLogPanel = false,
+}: SuiFundDashboardProps) {
   const { messages } = useI18n();
   const inv = messages.invest;
   const {
@@ -179,6 +277,7 @@ export function SuiFundDashboard({ asPage = false, omitIntro = false }: SuiFundD
           </div>
         </div>
 
+        {!hideDepositPanel ? (
         <div className="mt-10 grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
           <div className="rounded-[2rem] border border-white/10 bg-white/[0.045] p-6 backdrop-blur-2xl">
             <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -293,65 +392,13 @@ export function SuiFundDashboard({ asPage = false, omitIntro = false }: SuiFundD
             </p>
           </div>
         </div>
+        ) : null}
 
-        <div className="mt-10">
-          <div className="rounded-[2rem] border border-white/10 bg-white/[0.045] p-6 backdrop-blur-2xl">
-            <div className="mb-6 flex items-center justify-between">
-              <div>
-                <div className="text-sm uppercase tracking-[0.18em] text-slate-400">{inv.aiLogTitle}</div>
-                <div className="mt-2 text-2xl font-semibold text-white">{inv.aiLogSubtitle}</div>
-              </div>
-              <div className="rounded-full border border-fuchsia-400/20 bg-fuchsia-400/10 px-3 py-1 text-xs uppercase tracking-[0.14em] text-fuchsia-200">
-                {inv.trustLayerBadge}
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              {snapshot.aiLogs.map((entry) => (
-                <motion.div
-                  key={entry.id}
-                  whileHover={{ x: 4 }}
-                  className="rounded-[1.5rem] border border-white/[0.09] bg-[rgba(5,9,18,0.68)] p-4 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-sm"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex items-start gap-3">
-                      <div className="mt-1 rounded-full bg-white/8 p-2">
-                        <CircleDot className="h-4 w-4 text-teal-300/90" />
-                      </div>
-                      <div>
-                        <div className="text-xs uppercase tracking-[0.18em] text-slate-500">{entry.timestampLabel}</div>
-                        <div className="mt-1 text-lg font-semibold text-white">{entry.title}</div>
-                      </div>
-                    </div>
-                    <div
-                      className={cn(
-                        'rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em]',
-                        entry.status === 'verified'
-                          ? 'bg-emerald-500/15 text-emerald-300'
-                          : entry.status === 'failed'
-                            ? 'bg-rose-500/15 text-rose-300'
-                            : 'bg-amber-500/15 text-amber-300',
-                      )}
-                    >
-                      {formatAiLogStatus(entry.status, inv)}
-                    </div>
-                  </div>
-
-                  <p className="mt-3 text-sm leading-6 text-slate-400">{entry.summary}</p>
-
-                  <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
-                    <span>
-                      {entry.txDigest
-                        ? `${inv.digestPrefix} ${entry.txDigest.slice(0, 12)}`
-                        : inv.digestPending}
-                    </span>
-                    <span>{inv.aiPilotTrace}</span>
-                  </div>
-                </motion.div>
-              ))}
-            </div>
+        {!hideAiLogPanel ? (
+          <div className="mt-10">
+            <AiFlightLogPanel snapshot={snapshot} inv={inv} />
           </div>
-        </div>
+        ) : null}
 
         <div className="mt-8 flex flex-wrap items-center gap-3 text-sm">
           <div className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-slate-300">

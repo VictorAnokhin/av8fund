@@ -1,16 +1,55 @@
 import React from 'react';
+import { useCurrentAccount } from '@mysten/dapp-kit';
 import { Shield, Twitter, Linkedin, Github } from 'lucide-react';
 import { useI18n } from '../i18n';
-import type { ProjectSettings } from '../lib/api';
-import { getAboutPath, getArticlesPath, getBasePath, getInvestPath, getKycAmlPath, getMintPath, getPortfolioPath, getPrivacyPolicyPath, getSwapPath, getTermsOfServicePath, getTokensPath, getWhitepaperPath } from '../lib/routes';
+import { SUI_NETWORK, SUI_RWA_PACKAGE_ID } from '../config';
+import { getRwaAdminCaps, type ProjectSettings, type ResolvedUserWallet, type RwaAdminCapRecord } from '../lib/api';
+import { IDENTITY_SESSION_EVENT, readIdentitySession, type IdentitySession } from '../lib/identitySession';
+import { getAboutPath, getArticlesPath, getBasePath, getFundAccountsPath, getFundBasketPath, getInvestPath, getKycAmlPath, getMintPath, getPortfolioPath, getPrivacyPolicyPath, getSwapPath, getTermsOfServicePath, getTokensPath, getWhitepaperPath } from '../lib/routes';
 
 type FooterProps = {
   project: ProjectSettings;
-  currentPage?: 'home' | 'articles' | 'article' | 'swap' | 'mint' | 'invest' | 'portfolio' | 'about' | 'whitepaper' | 'privacy-policy' | 'terms-of-service' | 'kyc-aml' | 'token-admin';
+  currentPage?: 'home' | 'articles' | 'article' | 'swap' | 'mint' | 'invest' | 'portfolio' | 'fund-accounts' | 'fund-basket' | 'about' | 'whitepaper' | 'privacy-policy' | 'terms-of-service' | 'kyc-aml' | 'token-admin';
 };
 
+function normalizeAddress(value?: string | null): string {
+  return String(value || '').trim().toLowerCase();
+}
+
+function walletsFromIdentitySession(session: IdentitySession | null): ResolvedUserWallet[] {
+  const user = session?.user;
+  if (!user) {
+    return [];
+  }
+
+  if (Array.isArray(user.wallets) && user.wallets.length > 0) {
+    return user.wallets;
+  }
+
+  if (user.wallet_address) {
+    return [{
+      address: user.wallet_address,
+      network: user.wallet_network,
+      connected_at: user.wallet_connected_at,
+    }];
+  }
+
+  if (user.zklogin_wallet_address) {
+    return [{
+      address: user.zklogin_wallet_address,
+      network: 'sui',
+      web3auth: 1,
+    }];
+  }
+
+  return [];
+}
+
 export function Footer({ project, currentPage = 'home' }: FooterProps) {
+  const account = useCurrentAccount();
   const [logoError, setLogoError] = React.useState(false);
+  const [identitySession, setIdentitySession] = React.useState<IdentitySession | null>(() => readIdentitySession());
+  const [adminCaps, setAdminCaps] = React.useState<RwaAdminCapRecord[]>([]);
   const logoUrl = project.foto_footer_preview || project.foto_preview;
   const brandName = project.name.trim() || 'AV8Capital';
   const projectDescription = (project.description || '').replace(/<[^>]+>/g, ' ').trim() || 'High-end hybrid wealth management. Secure, transparent, and globally accessible investment ecosystem.';
@@ -18,6 +57,8 @@ export function Footer({ project, currentPage = 'home' }: FooterProps) {
   const articlesHref = getArticlesPath();
   const investHref = getInvestPath();
   const portfolioHref = getPortfolioPath();
+  const fundAccountsHref = getFundAccountsPath();
+  const fundBasketHref = getFundBasketPath();
   const aboutHref = getAboutPath();
   const kycAmlHref = getKycAmlPath();
   const privacyPolicyHref = getPrivacyPolicyPath();
@@ -29,6 +70,19 @@ export function Footer({ project, currentPage = 'home' }: FooterProps) {
   const homeSectionHref = (section: string) => (currentPage === 'home' ? section : `${basePath}${section}`);
   const { messages } = useI18n();
   const shouldShowLogo = Boolean(logoUrl) && !logoError;
+  const identityWallets = React.useMemo(() => walletsFromIdentitySession(identitySession), [identitySession]);
+  const authorizedAdminAddresses = React.useMemo(
+    () => new Set(adminCaps.map((cap) => normalizeAddress(cap.owner_address)).filter(Boolean)),
+    [adminCaps],
+  );
+  const hasAdminFooterAccess = React.useMemo(() => {
+    const currentWallet = normalizeAddress(account?.address);
+    if (currentWallet && authorizedAdminAddresses.has(currentWallet)) {
+      return true;
+    }
+
+    return identityWallets.some((wallet) => authorizedAdminAddresses.has(normalizeAddress(wallet.address)));
+  }, [account?.address, authorizedAdminAddresses, identityWallets]);
   const socialLinks = [
     {
       href: project.twitter ? `https://x.com/${project.twitter.replace(/^@/, '')}` : '',
@@ -54,6 +108,43 @@ export function Footer({ project, currentPage = 'home' }: FooterProps) {
   React.useEffect(() => {
     setLogoError(false);
   }, [logoUrl]);
+
+  React.useEffect(() => {
+    let active = true;
+
+    getRwaAdminCaps({
+      network: SUI_NETWORK,
+      packageId: SUI_RWA_PACKAGE_ID,
+    })
+      .then((items) => {
+        if (active) {
+          setAdminCaps(items);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setAdminCaps([]);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    function handleIdentitySessionChange() {
+      setIdentitySession(readIdentitySession());
+    }
+
+    window.addEventListener(IDENTITY_SESSION_EVENT, handleIdentitySessionChange);
+    window.addEventListener('storage', handleIdentitySessionChange);
+
+    return () => {
+      window.removeEventListener(IDENTITY_SESSION_EVENT, handleIdentitySessionChange);
+      window.removeEventListener('storage', handleIdentitySessionChange);
+    };
+  }, []);
 
   return (
     <footer className="relative border-t border-white/[0.06] bg-[linear-gradient(180deg,rgba(5,7,14,0.95)_0%,#03050c_100%)] pb-10 pt-20">
@@ -130,17 +221,25 @@ export function Footer({ project, currentPage = 'home' }: FooterProps) {
           </a>
         </div>
 
-        <div className="space-y-4">
-          <h4 className="mb-6 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-            {messages.footer.adminPanel}
-          </h4>
-          <a href={tokensHref} className="block text-sm tracking-wide text-slate-500 transition-colors duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:text-teal-100/95">
-            {messages.navbar.tokens}
-          </a>
-          <a href={mintHref} className="block text-sm tracking-wide text-slate-500 transition-colors duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:text-teal-100/95">
-            {messages.footer.rwaMint}
-          </a>
-        </div>
+        {hasAdminFooterAccess ? (
+          <div className="space-y-4">
+            <h4 className="mb-6 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+              {messages.footer.adminPanel}
+            </h4>
+            <a href={tokensHref} className="block text-sm tracking-wide text-slate-500 transition-colors duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:text-teal-100/95">
+              {messages.navbar.tokens}
+            </a>
+            <a href={mintHref} className="block text-sm tracking-wide text-slate-500 transition-colors duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:text-teal-100/95">
+              {messages.footer.rwaMint}
+            </a>
+            <a href={fundAccountsHref} className="block text-sm tracking-wide text-slate-500 transition-colors duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:text-teal-100/95">
+              Счета фонда
+            </a>
+            <a href={fundBasketHref} className="block text-sm tracking-wide text-slate-500 transition-colors duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:text-teal-100/95">
+              Корзина фонда
+            </a>
+          </div>
+        ) : null}
 
         <div className="space-y-4">
           <h4 className="mb-6 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">

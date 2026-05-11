@@ -2,6 +2,8 @@ import React from 'react';
 
 import type { TokenAdminCopy } from './lib/tokenAdminI18n';
 import { tokenAdminEn, tokenAdminRu, tokenAdminUa } from './lib/tokenAdminI18n';
+import type { FundAccountsCopy, FundBasketCopy } from './lib/fundPagesI18n';
+import { fundAccountsEn, fundAccountsRu, fundAccountsUa, fundBasketEn, fundBasketRu, fundBasketUa } from './lib/fundPagesI18n';
 
 export type Language = 'en' | 'ua' | 'ru';
 
@@ -450,7 +452,10 @@ type Translation = {
     defiSuiCetusTitle: string;
     defiSuiCetusBlurb: string;
     defiSuiCetusOpenApp: string;
-    /** Cockpit panel title (replaces “Flight controls”). */
+    /** Main heading for wallet token list panel (control stack). */
+    cockpitWalletTokensTitle: string;
+    /** Subheading inside the token list card. */
+    cockpitWalletTokensListHeading: string;
     cockpitInvestHeading: string;
     cockpitDeployCapital: string;
     cockpitRecallLiquidity: string;
@@ -603,6 +608,8 @@ type Translation = {
     };
   };
   tokenAdmin: TokenAdminCopy;
+  fundBasket: FundBasketCopy;
+  fundAccounts: FundAccountsCopy;
 };
 
 const translations: Record<Language, Translation> = {
@@ -1159,8 +1166,8 @@ const translations: Record<Language, Translation> = {
         'AV8 issuance is displayed before signing. The current executable path deposits SUI into the portfolio; full atomic AV8 minting requires the deployed fund_share TreasuryCap to be wired into the portfolio deposit flow.',
       depositAvailableTokenCard: 'Available {symbol}',
       depositWalletDetectionHint: 'Detected in active Sui wallet or zkLogin session',
-      depositAv8ShareCard: 'Available AV8 Share',
-      depositAv8WithdrawHint: 'Ready for portfolio::withdraw when share coins exist',
+      depositAv8ShareCard: 'You have',
+      depositAv8WithdrawHint: 'Ready to withdraw',
       depositAvailableInWalletPrefix: 'Available in wallet:',
       redeemAv8ShareLabel: 'Redeem AV8 share',
       depositPtbRouteLabel: 'PTB route:',
@@ -1231,6 +1238,8 @@ const translations: Record<Language, Translation> = {
       defiSuiCetusTitle: 'Swap on Sui (Cetus)',
       defiSuiCetusBlurb: 'Quotes and swaps use the Cetus aggregator on your selected Sui network (same engine as the dedicated swap rail).',
       defiSuiCetusOpenApp: 'Open Cetus app',
+      cockpitWalletTokensTitle: 'Wallet tokens',
+      cockpitWalletTokensListHeading: 'Wallet tokens',
       cockpitInvestHeading: 'Invest',
       cockpitDeployCapital: 'Deposit',
       cockpitRecallLiquidity: 'Withdraw from deposit',
@@ -1395,6 +1404,8 @@ const translations: Record<Language, Translation> = {
       },
     },
     tokenAdmin: tokenAdminEn,
+    fundBasket: fundBasketEn,
+    fundAccounts: fundAccountsEn,
   },
   ua: {
     breadcrumbs: {
@@ -1949,8 +1960,8 @@ const translations: Record<Language, Translation> = {
         'Випуск AV8 показується перед підписом. Поточний робочий шлях вносить SUI в портфель; повне атомарне карбування AV8 потребує підключення TreasuryCap fund_share до потоку депозиту портфеля.',
       depositAvailableTokenCard: 'Доступно {symbol}',
       depositWalletDetectionHint: 'Виявлено в активному гаманці Sui або сесії zkLogin',
-      depositAv8ShareCard: 'Доступна частка AV8',
-      depositAv8WithdrawHint: 'Готово до portfolio::withdraw, коли є монети частки',
+      depositAv8ShareCard: 'У вас',
+      depositAv8WithdrawHint: 'Готово для виведення',
       depositAvailableInWalletPrefix: 'Доступно в гаманці:',
       redeemAv8ShareLabel: 'Повернення частки AV8',
       depositPtbRouteLabel: 'Маршрут PTB:',
@@ -2021,6 +2032,8 @@ const translations: Record<Language, Translation> = {
       defiSuiCetusTitle: 'Своп у Sui (Cetus)',
       defiSuiCetusBlurb: 'Котирування та обмін йдуть через агрегатор Cetus у вашій обраній мережі Sui (той самий рушій, що на окремій сторінці свопу).',
       defiSuiCetusOpenApp: 'Відкрити Cetus',
+      cockpitWalletTokensTitle: 'Токени гаманця',
+      cockpitWalletTokensListHeading: 'Токени гаманця',
       cockpitInvestHeading: 'Інвестувати',
       cockpitDeployCapital: 'Внести в депозит',
       cockpitRecallLiquidity: 'Забрати з депозиту',
@@ -2185,6 +2198,8 @@ const translations: Record<Language, Translation> = {
       },
     },
     tokenAdmin: tokenAdminUa,
+    fundBasket: fundBasketUa,
+    fundAccounts: fundAccountsUa,
   },
   ru: {
     breadcrumbs: {
@@ -2739,8 +2754,8 @@ const translations: Record<Language, Translation> = {
         'Выпуск AV8 показывается до подписи. Текущий рабочий путь вносит SUI в портфель; полное атомарное чеканение AV8 требует подключения TreasuryCap fund_share к потоку депозита портфеля.',
       depositAvailableTokenCard: 'Доступно {symbol}',
       depositWalletDetectionHint: 'Обнаружено в активном кошельке Sui или сессии zkLogin',
-      depositAv8ShareCard: 'Доступная доля AV8',
-      depositAv8WithdrawHint: 'Готово к portfolio::withdraw при наличии монет доли',
+      depositAv8ShareCard: 'У вас',
+      depositAv8WithdrawHint: 'Готово для вывода',
       depositAvailableInWalletPrefix: 'Доступно в кошельке:',
       redeemAv8ShareLabel: 'Вывод доли AV8',
       depositPtbRouteLabel: 'Маршрут PTB:',
@@ -2811,6 +2826,8 @@ const translations: Record<Language, Translation> = {
       defiSuiCetusTitle: 'Обмен в Sui (Cetus)',
       defiSuiCetusBlurb: 'Котировки и свап идут через агрегатор Cetus в выбранной сети Sui (тот же движок, что на отдельной странице обмена).',
       defiSuiCetusOpenApp: 'Открыть Cetus',
+      cockpitWalletTokensTitle: 'Токены кошелька',
+      cockpitWalletTokensListHeading: 'Токены кошелька',
       cockpitInvestHeading: 'Инвестировать',
       cockpitDeployCapital: 'Внести в депозит',
       cockpitRecallLiquidity: 'Забрать из депозита',
@@ -2975,6 +2992,8 @@ const translations: Record<Language, Translation> = {
       },
     },
     tokenAdmin: tokenAdminRu,
+    fundBasket: fundBasketRu,
+    fundAccounts: fundAccountsRu,
   },
 };
 

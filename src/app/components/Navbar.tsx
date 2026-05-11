@@ -96,7 +96,7 @@ function getEthereumProvider(kind: 'metamask' | 'rabby'): Eip1193Provider | null
 
 type NavbarProps = {
   project: ProjectSettings;
-  currentPage?: 'home' | 'articles' | 'article' | 'swap' | 'mint' | 'invest' | 'portfolio' | 'about' | 'whitepaper' | 'privacy-policy' | 'terms-of-service' | 'kyc-aml' | 'token-admin';
+  currentPage?: 'home' | 'articles' | 'article' | 'swap' | 'mint' | 'invest' | 'portfolio' | 'fund-accounts' | 'fund-basket' | 'about' | 'whitepaper' | 'privacy-policy' | 'terms-of-service' | 'kyc-aml' | 'token-admin';
 };
 
 export function Navbar({ project, currentPage = 'home' }: NavbarProps) {
@@ -177,15 +177,15 @@ export function Navbar({ project, currentPage = 'home' }: NavbarProps) {
     () => identityWallets.filter((wallet) => walletMatchesHeaderNetwork(wallet, selectedNetwork)),
     [identityWallets, selectedNetwork],
   );
-  const walletLabel = currentAccount
-    ? shortAddress(currentAccount.address)
-    : externalSessionAddress
-      ? shortAddress(externalSessionAddress)
-      : identitySession?.user?.name || identitySession?.user?.email
-        ? String(identitySession?.user?.name || identitySession?.user?.email)
-      : externalSession?.type === 'google'
-        ? externalSession.name || externalSession.email || 'Google'
-        : 'Connect Wallet';
+  const walletLabel = identitySession?.user?.name || identitySession?.user?.email
+    ? String(identitySession?.user?.name || identitySession?.user?.email)
+    : externalSession?.type === 'google'
+      ? externalSession.name || externalSession.email || 'Google'
+      : currentAccount
+        ? shortAddress(currentAccount.address)
+        : externalSessionAddress
+          ? shortAddress(externalSessionAddress)
+          : 'Connect Wallet';
   const networkFamily = getHeaderNetworkFamily(selectedNetwork);
   const selectedNetworkLabel = headerNetworkFullLabel(selectedNetwork, messages.navbar.chainNames);
   const languageOptions = [

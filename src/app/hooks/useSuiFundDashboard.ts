@@ -395,7 +395,7 @@ export function useSuiFundDashboard(): SuiFundDashboardState {
           fundTokenRecords.map((record) => [record.coin_type.trim().toLowerCase(), record]),
         );
 
-        const tokens = await Promise.all(walletBalances.map(async ({ coinType, balance }) => {
+        const walletTokens = await Promise.all(walletBalances.map(async ({ coinType, balance }) => {
           const whitelistRecord = whitelistByType.get(coinType.toLowerCase());
           if (whitelistRecord) {
             return tokenFromFundRecord(whitelistRecord, balance);
@@ -418,8 +418,9 @@ export function useSuiFundDashboard(): SuiFundDashboardState {
           };
         }));
 
+        const tokens = walletTokens.filter((token) => token.whitelisted);
         const hasSui = tokens.some((token) => token.coinType.toLowerCase() === SUI_COIN_TYPE.toLowerCase());
-        if (!hasSui) {
+        if (!hasSui && whitelistByType.has(SUI_COIN_TYPE.toLowerCase())) {
           tokens.unshift(defaultDepositToken());
         }
 
@@ -872,6 +873,7 @@ export function useSuiFundDashboard(): SuiFundDashboardState {
 
       const transaction = new Transaction();
       transaction.setSender(currentOwnerAddress);
+      const shareCoin = buildCoinArgument(transaction, shareCoins, amount);
 
       transaction.moveCall({
         target: `${ensure0x(SUI_FUND_CONFIG.packageId)}::${FUND_MODULE}::redeem_sui_with_av8`,

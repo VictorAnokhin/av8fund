@@ -2,7 +2,7 @@ export function getBasePath(pathname?: string): string {
   const rawPath = pathname ?? (typeof window !== 'undefined' ? window.location.pathname : '/')
   return (
     rawPath.replace(
-      /\/(?:articles(?:\/[^/]+)?|swap|mint|invest|portfolio|about|whitepaper|privacy-policy|terms-of-service|kyc-aml|admin\/tokens|tokens)\/?$/,
+      /\/(?:articles(?:\/[^/]+)?|swap|mint|invest|portfolio|fund-accounts|fund-basket|about|whitepaper|privacy-policy|terms-of-service|kyc-aml|admin\/tokens|tokens)\/?$/,
       '',
     ) || '/'
   )
@@ -35,6 +35,16 @@ export function getInvestPath(basePath?: string): string {
 export function getPortfolioPath(basePath?: string): string {
   const root = getBasePath(basePath)
   return root === '/' ? '/portfolio' : `${root}/portfolio`
+}
+
+export function getFundAccountsPath(basePath?: string): string {
+  const root = getBasePath(basePath)
+  return root === '/' ? '/fund-accounts' : `${root}/fund-accounts`
+}
+
+export function getFundBasketPath(basePath?: string): string {
+  const root = getBasePath(basePath)
+  return root === '/' ? '/fund-basket' : `${root}/fund-basket`
 }
 
 export function getAboutPath(basePath?: string): string {

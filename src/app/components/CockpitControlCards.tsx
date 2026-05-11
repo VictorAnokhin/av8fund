@@ -114,6 +114,12 @@ type CockpitControlCardsProps = {
 const ACTIVE_WALLET_KEY = 'av8fund.active-wallet';
 const ACTIVE_WALLET_EVENT = 'av8fund:active-wallet';
 const ACTIVE_WALLET_REFRESH_EVENT = 'av8fund:active-wallet-refresh';
+const DEFAULT_TOKEN_LOGOS: Record<string, string> = {
+  sui: 'https://assets.coingecko.com/coins/images/26375/large/sui-ocean-square.png',
+  usdc: 'https://assets.coingecko.com/coins/images/6319/large/usdc.png',
+  av8: 'https://assets.coingecko.com/coins/images/325/large/Tether.png',
+};
+const SUI_TYPE_SUFFIX = '::sui::sui';
 
 type Eip1193Provider = {
   isMetaMask?: boolean;
@@ -665,6 +671,21 @@ function investInterpolate(template: string, symbol: string): string {
   return template.replace(/\{symbol\}/g, symbol);
 }
 
+function tokenFallbackLogo(symbol?: string | null, address?: string | null): string {
+  const normalizedSymbol = String(symbol || '').trim().toLowerCase();
+  const normalizedAddress = String(address || '').trim().toLowerCase();
+  if (normalizedAddress.endsWith(SUI_TYPE_SUFFIX) || normalizedSymbol === 'sui') {
+    return DEFAULT_TOKEN_LOGOS.sui;
+  }
+  if (normalizedSymbol === 'usdc' || normalizedSymbol === 'usd coin') {
+    return DEFAULT_TOKEN_LOGOS.usdc;
+  }
+  if (normalizedSymbol === 'av8' || normalizedAddress.includes('::fund_share::fund_share')) {
+    return DEFAULT_TOKEN_LOGOS.av8;
+  }
+  return '';
+}
+
 export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: CockpitControlCardsProps) {
   const { messages } = useI18n();
   const inv = messages.invest;
@@ -777,6 +798,7 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
   const filterLinkedWalletsForSolana = isSolanaNetworkActive;
   const filterLinkedWalletsForEvm = networkFamily === 'evm';
   const currentSuiAddress = normalizeWalletAddress(currentAccount?.address);
+  const signingWalletLabel = currentAccount?.address ? `${currentAccount.address.slice(0, 8)}...${currentAccount.address.slice(-6)}` : '';
   const connectedWalletAddress = currentSuiAddress || normalizeWalletAddress(getExternalSessionAddress(externalSession));
   const displayedLinkedWalletsBase = React.useMemo(() => {
     if (filterLinkedWalletsForPortfolio) {
@@ -1143,13 +1165,17 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
   const tokenLogoByAddress = React.useMemo(() => {
     return walletNetworkTokens.reduce<Record<string, string>>((acc, token) => {
       const address = String(token.token_address || '').trim().toLowerCase();
-      const logo = String(token.logo || '').trim();
+      const logo = String(token.logo || '').trim() || tokenFallbackLogo(token.symbol, address);
       if (address && logo) {
         acc[address] = logo;
       }
       return acc;
     }, {});
   }, [walletNetworkTokens]);
+  const resolveTokenLogo = React.useCallback((token: Web3SwapToken) => {
+    const address = String(token.address || '').trim().toLowerCase();
+    return tokenLogoByAddress[address] || tokenFallbackLogo(token.symbol, address);
+  }, [tokenLogoByAddress]);
 
   React.useEffect(() => {
     setExternalSession(readExternalWalletSession());
@@ -2411,11 +2437,61 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
     }
 
     await executeInvest();
+    setInvestRouteNotice(null);
+    await handleRefreshWalletData();
   }, [
     activeWalletAddress,
     activeWalletForBroadcast?.web3auth,
     activeWalletIsSui,
     executeInvest,
+    handleRefreshWalletData,
+    identitySession?.token,
+    isZkLoginGoogleSession,
+    suiSendSigningRoute.useExtension,
+    suiSendSigningRoute.useZkLogin,
+  ]);
+
+  const handleRedeemWithdraw = React.useCallback(async () => {
+    setInvestRouteNotice(null);
+
+    if (!activeWalletAddress || !activeWalletIsSui) {
+      persistHeaderNetwork('sui');
+      setIsWalletModalOpen(true);
+      setInvestRouteNotice('Подключите Sui кошелек или выберите Sui zkLogin-адрес, чтобы подписать вывод из депозита.');
+      return;
+    }
+
+    if (!suiSendSigningRoute.useExtension && !suiSendSigningRoute.useZkLogin) {
+      const w3a = activeWalletForBroadcast?.web3auth;
+      if (w3a === 0) {
+        persistHeaderNetwork('sui');
+        setIsWalletModalOpen(true);
+        setInvestRouteNotice('AV8 виден, но выбранный кошелек не подключен как подписант. Подключите этот Sui wallet для вывода.');
+        return;
+      }
+
+      if (w3a === 1 || isZkLoginGoogleSession || Boolean(identitySession?.token)) {
+        setIsZkLoginAssistDialogOpen(true);
+        setGoogleSuiButtonVersion((version) => version + 1);
+        setInvestRouteNotice('AV8 виден, но zkLogin-сессия для подписи не активна. Войдите через Google zkLogin.');
+        return;
+      }
+
+      persistHeaderNetwork('sui');
+      setIsWalletModalOpen(true);
+      setInvestRouteNotice('Для вывода нужна подпись. Подключите Sui wallet или войдите через Google zkLogin.');
+      return;
+    }
+
+    await executeRedeem();
+    setInvestRouteNotice(null);
+    await handleRefreshWalletData();
+  }, [
+    activeWalletAddress,
+    activeWalletForBroadcast?.web3auth,
+    activeWalletIsSui,
+    executeRedeem,
+    handleRefreshWalletData,
     identitySession?.token,
     isZkLoginGoogleSession,
     suiSendSigningRoute.useExtension,
@@ -2918,7 +2994,19 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
           ) : null}
           {displayedLinkedWallets.length > 0 ? (
             <div>
-              <div className="text-[11px] uppercase tracking-[0.18em] text-sky-100/65">{messages.hero.availableWallet}</div>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-sky-100/65">{messages.hero.availableWallet}</div>
+                {signingWalletLabel ? (
+                  <button
+                    type="button"
+                    onClick={() => setIsWalletModalOpen(true)}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/25 bg-emerald-400/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-emerald-100 transition hover:bg-emerald-400/15"
+                  >
+                    <Wallet className="h-3.5 w-3.5" />
+                    {signingWalletLabel}
+                  </button>
+                ) : null}
+              </div>
               <div className="mt-2 flex flex-wrap gap-2">
                 {displayedLinkedWallets.map((wallet) => {
                   const normalizedAddress = normalizeWalletAddress(wallet.address);
@@ -2979,7 +3067,7 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
                 className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-slate-950 shadow-[0_0_20px_rgba(16,185,129,0.3)] transition-all hover:bg-emerald-400"
               >
                 <Wallet className="h-4 w-4" />
-                {messages.hero.connectWalletCta}
+                {signingWalletLabel || messages.hero.connectWalletCta}
               </button>
             ) : null}
             {isSuiNetworkActive && identitySession?.token && !isZkLoginGoogleSession && !hasLinkedZkLoginWallet ? (
@@ -3058,130 +3146,18 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
 
       <div className="min-w-0 rounded-[1.5rem] border border-white/10 bg-white/[0.045] p-4 backdrop-blur-2xl sm:rounded-[2rem] sm:p-6">
         <div className="mb-6 flex items-center justify-between">
-          <div>
-            <div className="text-sm uppercase tracking-[0.18em] text-slate-400">Control Stack</div>
-            <div className="mt-2 text-2xl font-semibold text-white">{messages.portfolio.cockpitInvestHeading}</div>
+          <div className="text-2xl font-semibold text-white">
+            {messages.portfolio.cockpitWalletTokensTitle}
           </div>
           <div className="rounded-full bg-white/5 px-3 py-1 text-xs uppercase tracking-[0.14em] text-slate-300">
-            {SUI_FUND_CONFIG.network}
+            {isSuiNetworkActive ? SUI_FUND_CONFIG.network : selectedNetworkLabel}
           </div>
         </div>
 
         {isSuiNetworkActive ? (
           <>
-            <div className="space-y-3">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="relative overflow-hidden rounded-[1.4rem] border border-sky-400/25 bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.22),_transparent_55%),rgba(8,47,73,0.75)] p-4 shadow-[0_0_35px_rgba(56,189,248,0.12)]">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-200/80">
-                    {investInterpolate(inv.depositAvailableTokenCard, depositToken.symbol)}
-                  </div>
-                  <div className="mt-2 text-xl font-semibold text-white">
-                    {balancesLoading ? inv.depositLoading : investBalanceLabel}
-                  </div>
-                  <div className="mt-1 text-xs text-sky-100/70">{inv.depositWalletDetectionHint}</div>
-                </div>
-                <div className="relative overflow-hidden rounded-[1.4rem] border border-emerald-400/25 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.2),_transparent_55%),rgba(6,46,30,0.76)] p-4 shadow-[0_0_35px_rgba(16,185,129,0.12)]">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-200/80">{inv.depositAv8ShareCard}</div>
-                  <div className="mt-2 text-xl font-semibold text-white">
-                    {balancesLoading ? inv.depositLoading : redeemBalanceLabel}
-                  </div>
-                  <div className="mt-1 text-xs text-emerald-100/70">{inv.depositAv8WithdrawHint}</div>
-                </div>
-              </div>
-              <div className="grid gap-3">
-                <label className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-                  {inv.depositAssetFromWalletLabel}
-                  <select
-                    value={depositToken.coinType}
-                    onChange={(event) => setDepositTokenSymbol(event.target.value)}
-                    className="mt-2 w-full rounded-2xl border border-white/[0.1] bg-[rgba(5,9,18,0.82)] px-4 py-3 text-base font-medium text-white outline-none shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-sm transition-[border-color,box-shadow] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] focus:border-teal-400/40"
-                  >
-                    {depositTokenOptions.map((token) => (
-                      <option key={token.coinType} value={token.coinType}>
-                        {token.symbol} - {formatDepositTokenBalance(token)} -{' '}
-                        {token.whitelisted ? inv.depositTokenWhitelisted : inv.depositTokenNotWhitelisted}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="mt-2 text-xs font-semibold normal-case tracking-normal text-slate-500">
-                    {inv.depositAvailableInWalletPrefix} {formatDepositTokenBalance(depositToken)}
-                  </div>
-                </label>
-                <label className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-                  {inv.depositAmountFieldLabel}
-                  <input
-                    type="number"
-                    min="0"
-                    step="any"
-                    value={investAmount}
-                    onChange={(event) => setInvestAmount(event.target.value)}
-                    className="mt-2 w-full rounded-2xl border border-white/[0.1] bg-[rgba(5,9,18,0.82)] px-4 py-3 text-base font-medium text-white outline-none shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-sm transition-[border-color,box-shadow] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] focus:border-teal-400/40"
-                    placeholder={`1 ${depositToken.symbol}`}
-                  />
-                </label>
-                <label className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-                  {inv.redeemAv8ShareLabel}
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.000001"
-                    value={redeemAmount}
-                    onChange={(event) => setRedeemAmount(event.target.value)}
-                    className="mt-2 w-full rounded-2xl border border-white/[0.1] bg-[rgba(5,9,18,0.82)] px-4 py-3 text-base font-medium text-white outline-none shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-sm transition-[border-color,box-shadow] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] focus:border-teal-400/40"
-                    placeholder="1.000000"
-                  />
-                </label>
-              </div>
-              <button
-                type="button"
-                onClick={() => void handleInvestDeposit()}
-                disabled={actionState.busy || !depositToken.executable}
-                className="flex w-full items-center justify-center rounded-2xl bg-gradient-to-r from-sky-400 to-cyan-300 px-4 py-3 font-semibold text-slate-950 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {actionState.busy ? messages.portfolio.cockpitSubmittingPtb : messages.portfolio.cockpitDeployCapital}
-              </button>
-              <button
-                type="button"
-                onClick={() => void executeRedeem()}
-                className="flex w-full items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-4 py-3 font-semibold text-white transition hover:bg-white/10"
-              >
-                {messages.portfolio.cockpitRecallLiquidity}
-              </button>
-              {investRouteNotice ? (
-                <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">
-                  {investRouteNotice}
-                </div>
-              ) : null}
-            </div>
-
-            <div className="mt-5 rounded-2xl border border-white/[0.1] bg-[rgba(5,9,18,0.72)] p-4 text-sm leading-6 text-slate-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-sm">
-              {inv.depositPtbRouteLabel}
-              <div className="mt-2 font-medium text-slate-200">
-                <code>deposit(registry, basket, position, Coin&lt;SUI&gt;) / withdraw(basket, Coin&lt;AV8&gt;)</code>
-              </div>
-              {!depositToken.executable ? (
-                <div className="mt-3 text-amber-100">
-                  {depositToken.whitelisted
-                    ? investInterpolate(inv.depositRouteBlockedWhitelisted, depositToken.symbol)
-                    : investInterpolate(inv.depositRouteBlockedNotWhitelisted, depositToken.symbol)}
-                </div>
-              ) : null}
-            </div>
-
-            {actionState.error ? (
-              <div className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">
-                {actionState.error}
-              </div>
-            ) : null}
-
-            {actionState.lastDigest ? (
-              <div className="mt-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm text-emerald-100">
-                Executed transaction: {actionState.lastDigest}
-              </div>
-            ) : null}
-
-            <div className="min-w-0 rounded-2xl border border-white/[0.1] bg-[rgba(5,9,18,0.72)] p-3 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-sm sm:mt-5 sm:p-4">
-              <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Network tokens</div>
+            <div className="min-w-0 rounded-2xl border border-white/[0.1] bg-[rgba(5,9,18,0.72)] p-3 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-sm sm:p-4">
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-400">{messages.portfolio.cockpitWalletTokensListHeading}</div>
               <div className="mt-2 text-sm text-slate-300">{selectedNetworkLabel}</div>
 
               {isNetworkTokensLoading ? (
@@ -3204,16 +3180,18 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
 
               {activeWalletIsSui && !isNetworkTokensLoading && !networkTokensError && filteredNetworkTokens.length > 0 ? (
                 <div className="mt-2 space-y-1 sm:mt-3 sm:space-y-2">
-                  {filteredNetworkTokens.slice(0, 24).map((token) => (
+                  {filteredNetworkTokens.slice(0, 24).map((token) => {
+                    const logoUrl = resolveTokenLogo(token);
+                    return (
                     <div
                       key={`${token.chain_id}:${token.address}`}
                       className="group flex min-w-0 items-center justify-between gap-1.5 rounded-xl border border-white/6 bg-white/[0.03] px-1.5 py-1.5 transition hover:bg-white/[0.05] sm:gap-4 sm:rounded-[1.25rem] sm:p-3"
                     >
                       <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-                        {tokenLogoByAddress[String(token.address || '').toLowerCase()] ? (
+                        {logoUrl ? (
                           <div className="h-8 w-8 shrink-0 overflow-hidden rounded-full bg-white/5 ring-1 ring-white/10 sm:h-10 sm:w-10">
                             <img
-                              src={tokenLogoByAddress[String(token.address || '').toLowerCase()]}
+                              src={logoUrl}
                               alt={token.symbol}
                               className="h-full w-full object-cover"
                             />
@@ -3252,19 +3230,16 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
                         })()}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : null}
             </div>
           </>
         ) : (
           <div className="space-y-3">
-            <div className="rounded-2xl border border-sky-400/20 bg-sky-400/10 p-4 text-sm leading-6 text-sky-100/85">
-              Full control stack is available when the active network is <span className="font-semibold">SUI</span>.
-              For <span className="font-semibold">{selectedNetworkLabel}</span>, token list is loaded from Laravel API.
-            </div>
             <div className="min-w-0 rounded-2xl border border-white/[0.1] bg-[rgba(5,9,18,0.72)] p-3 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-sm sm:p-4">
-              <div className="text-xs uppercase tracking-[0.18em] text-slate-400">Network tokens</div>
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-400">{messages.portfolio.cockpitWalletTokensListHeading}</div>
               <div className="mt-2 text-sm text-slate-300">{selectedNetworkLabel}</div>
 
               {isNetworkTokensLoading ? (
@@ -3283,16 +3258,18 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
 
               {!isNetworkTokensLoading && !networkTokensError && filteredNetworkTokens.length > 0 ? (
                 <div className="mt-2 space-y-1 sm:mt-3 sm:space-y-2">
-                  {filteredNetworkTokens.slice(0, 24).map((token) => (
+                  {filteredNetworkTokens.slice(0, 24).map((token) => {
+                    const logoUrl = resolveTokenLogo(token);
+                    return (
                     <div
                       key={`${token.chain_id}:${token.address}`}
                       className="group flex min-w-0 items-center justify-between gap-1.5 rounded-xl border border-white/6 bg-white/[0.03] px-1.5 py-1.5 transition hover:bg-white/[0.05] sm:gap-4 sm:rounded-[1.25rem] sm:p-3"
                     >
                       <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-                        {tokenLogoByAddress[String(token.address || '').toLowerCase()] ? (
+                        {logoUrl ? (
                           <div className="h-8 w-8 shrink-0 overflow-hidden rounded-full bg-white/5 ring-1 ring-white/10 sm:h-10 sm:w-10">
                             <img
-                              src={tokenLogoByAddress[String(token.address || '').toLowerCase()]}
+                              src={logoUrl}
                               alt={token.symbol}
                               className="h-full w-full object-cover"
                             />
@@ -3331,7 +3308,8 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
                         })()}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : null}
             </div>
@@ -3339,6 +3317,130 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
         )}
       </div>
       </div>
+
+      {isSuiNetworkActive ? (
+        <div className="mt-6 rounded-[1.5rem] border border-white/[0.1] bg-[rgba(5,9,18,0.72)] p-4 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-sm sm:rounded-[1.75rem] sm:p-5">
+          <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <div className="text-xs uppercase tracking-[0.18em] text-slate-400">{messages.portfolio.cockpitInvestHeading}</div>
+              <div className="mt-1 text-xl font-semibold text-white">Депозит AV8</div>
+            </div>
+            <div className="rounded-full bg-white/5 px-3 py-1 text-xs uppercase tracking-[0.14em] text-slate-300">
+              {SUI_FUND_CONFIG.network}
+            </div>
+          </div>
+
+          <div className="mb-4 grid gap-3 sm:grid-cols-2">
+            <div className="relative overflow-hidden rounded-[1.4rem] border border-sky-400/25 bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.22),_transparent_55%),rgba(8,47,73,0.75)] p-4 shadow-[0_0_35px_rgba(56,189,248,0.12)]">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-200/80">
+                {investInterpolate(inv.depositAvailableTokenCard, depositToken.symbol)}
+              </div>
+              <div className="mt-2 text-xl font-semibold text-white">
+                {balancesLoading ? inv.depositLoading : investBalanceLabel}
+              </div>
+              <div className="mt-1 text-xs text-sky-100/70">{inv.depositWalletDetectionHint}</div>
+            </div>
+            <div className="relative overflow-hidden rounded-[1.4rem] border border-emerald-400/25 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.2),_transparent_55%),rgba(6,46,30,0.76)] p-4 shadow-[0_0_35px_rgba(16,185,129,0.12)]">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-200/80">{inv.depositAv8ShareCard}</div>
+              <div className="mt-2 text-xl font-semibold text-white">
+                {balancesLoading ? inv.depositLoading : redeemBalanceLabel}
+              </div>
+              <div className="mt-1 text-xs text-emerald-100/70">{inv.depositAv8WithdrawHint}</div>
+            </div>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="rounded-2xl border border-white/[0.08] bg-white/[0.035] p-4">
+              <div className="mb-4 text-sm font-semibold uppercase tracking-[0.16em] text-sky-100">Добавить в депозит</div>
+              <label className="block">
+                <select
+                  value={depositToken.coinType}
+                  onChange={(event) => setDepositTokenSymbol(event.target.value)}
+                  className="mt-2 w-full rounded-2xl border border-white/[0.1] bg-[rgba(5,9,18,0.82)] px-4 py-3 text-base font-medium text-white outline-none shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-sm transition-[border-color,box-shadow] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] focus:border-teal-400/40"
+                >
+                  {depositTokenOptions.map((token) => (
+                    <option key={token.coinType} value={token.coinType}>
+                      {token.symbol} - {formatDepositTokenBalance(token)}
+                    </option>
+                  ))}
+                </select>
+                <div className="mt-2 text-xs font-semibold normal-case tracking-normal text-slate-500">
+                  {inv.depositAvailableInWalletPrefix} {formatDepositTokenBalance(depositToken)}
+                </div>
+              </label>
+              <label className="mt-4 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                {inv.depositAmountFieldLabel}
+                <input
+                  type="number"
+                  min="0"
+                  step="any"
+                  value={investAmount}
+                  onChange={(event) => setInvestAmount(event.target.value)}
+                  className="mt-2 w-full rounded-2xl border border-white/[0.1] bg-[rgba(5,9,18,0.82)] px-4 py-3 text-base font-medium text-white outline-none shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-sm transition-[border-color,box-shadow] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] focus:border-teal-400/40"
+                  placeholder={`1 ${depositToken.symbol}`}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => void handleInvestDeposit()}
+                disabled={actionState.busy || !depositToken.executable}
+                className="mt-4 flex w-full items-center justify-center rounded-2xl bg-gradient-to-r from-sky-400 to-cyan-300 px-4 py-3 font-semibold text-slate-950 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {actionState.busy ? messages.portfolio.cockpitSubmittingPtb : messages.portfolio.cockpitDeployCapital}
+              </button>
+            </div>
+
+            <div className="rounded-2xl border border-white/[0.08] bg-white/[0.035] p-4">
+              <div className="mb-4 text-sm font-semibold uppercase tracking-[0.16em] text-emerald-100">Забрать из депозита</div>
+              <label className="block">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.000001"
+                  value={redeemAmount}
+                  onChange={(event) => setRedeemAmount(event.target.value)}
+                  className="mt-2 w-full rounded-2xl border border-white/[0.1] bg-[rgba(5,9,18,0.82)] px-4 py-3 text-base font-medium text-white outline-none shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-sm transition-[border-color,box-shadow] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] focus:border-teal-400/40"
+                  placeholder="1.000000"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => void handleRedeemWithdraw()}
+                disabled={actionState.busy}
+                className="mt-4 flex w-full items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-4 py-3 font-semibold text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {actionState.busy ? messages.portfolio.cockpitSubmittingPtb : messages.portfolio.cockpitRecallLiquidity}
+              </button>
+            </div>
+          </div>
+
+          {investRouteNotice ? (
+            <div className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">
+              {investRouteNotice}
+            </div>
+          ) : null}
+
+          {!depositToken.executable ? (
+            <div className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">
+              {depositToken.whitelisted
+                ? investInterpolate(inv.depositRouteBlockedWhitelisted, depositToken.symbol)
+                : investInterpolate(inv.depositRouteBlockedNotWhitelisted, depositToken.symbol)}
+            </div>
+          ) : null}
+
+          {actionState.error ? (
+            <div className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">
+              {actionState.error}
+            </div>
+          ) : null}
+
+          {actionState.lastDigest ? (
+            <div className="mt-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm text-emerald-100">
+              Executed transaction: {actionState.lastDigest}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <Dialog
         open={isReceiveOpen}

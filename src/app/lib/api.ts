@@ -62,6 +62,55 @@ export function logFrontendDiagnostic(stage: string, data: Record<string, unknow
   })
 }
 
+export type AiChatMessage = {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export type AiChatResponse = {
+  answer: string
+  provider: string
+  model: string
+  billing?: {
+    paid_by?: string
+    sui_gas_sponsor_available?: boolean
+  }
+}
+
+export async function sendAiChatMessage(input: {
+  message: string
+  language: 'ru' | 'ua' | 'en'
+  page?: string
+  wallet?: string
+  history?: AiChatMessage[]
+}): Promise<AiChatResponse> {
+  const response = await fetch(toApiUrl('/api/ai/chat'), {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  })
+
+  const payload = await response.json().catch(() => ({}))
+
+  if (!response.ok) {
+    const message = typeof payload.message === 'string'
+      ? payload.message
+      : `AI request failed: ${response.status}`
+    const detail = typeof payload.error === 'string' && payload.error ? ` ${payload.error}` : ''
+    throw new Error(`${message}${detail}`)
+  }
+
+  return {
+    answer: String(payload.answer || ''),
+    provider: String(payload.provider || 'atoma'),
+    model: String(payload.model || ''),
+    billing: typeof payload.billing === 'object' && payload.billing !== null ? payload.billing : undefined,
+  }
+}
+
 export type ProjectSettings = {
   id: number
   name: string

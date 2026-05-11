@@ -1,7 +1,9 @@
 import React from 'react';
+import { HorizonAnalyticsPanel } from './Analytics';
 import { HorizonLineSection } from './HorizonLineSection';
 import { InvestmentSection } from './InvestmentSection';
 import { ManifestSection } from './ManifestSection';
+import { AiFlightLogSection } from './SuiFundDashboard';
 import { useI18n } from '../i18n';
 import { getBasePath } from '../lib/routes';
 import { PageBreadcrumbsBar, PageHeroBadge, PageHeroShell } from './PageChrome';
@@ -27,12 +29,15 @@ export function InvestPage() {
 
       <section className="px-6 py-10">
         <div className="mx-auto max-w-7xl space-y-6">
+          <HorizonAnalyticsPanel />
           <HorizonLineSection />
 
           <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
             <ManifestSection />
-            <InvestmentSection asPage omitIntro />
+            <InvestmentSection asPage omitIntro hideDepositPanel hideAiLogPanel />
           </div>
+
+          <AiFlightLogSection />
         </div>
       </section>
     </main>
