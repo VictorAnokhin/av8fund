@@ -1,6 +1,11 @@
 export function getBasePath(pathname?: string): string {
   const rawPath = pathname ?? (typeof window !== 'undefined' ? window.location.pathname : '/')
-  return rawPath.replace(/\/(?:articles(?:\/[^/]+)?|swap|mint|invest|portfolio|about|whitepaper|privacy-policy|terms-of-service|kyc-aml)\/?$/, '') || '/'
+  return (
+    rawPath.replace(
+      /\/(?:articles(?:\/[^/]+)?|swap|mint|invest|portfolio|about|whitepaper|privacy-policy|terms-of-service|kyc-aml|admin\/tokens|tokens)\/?$/,
+      '',
+    ) || '/'
+  )
 }
 
 export function getArticlesPath(basePath?: string): string {
@@ -55,4 +60,15 @@ export function getTermsOfServicePath(basePath?: string): string {
 export function getKycAmlPath(basePath?: string): string {
   const root = getBasePath(basePath)
   return root === '/' ? '/kyc-aml' : `${root}/kyc-aml`
+}
+
+export function getTokenAdminPath(basePath?: string): string {
+  const root = getBasePath(basePath)
+  return root === '/' ? '/admin/tokens' : `${root}/admin/tokens`
+}
+
+/** Short URL for the token admin screen (`/tokens`). */
+export function getTokensPath(basePath?: string): string {
+  const root = getBasePath(basePath)
+  return root === '/' ? '/tokens' : `${root}/tokens`
 }

@@ -2,11 +2,11 @@ import React from 'react';
 import { Shield, Twitter, Linkedin, Github } from 'lucide-react';
 import { useI18n } from '../i18n';
 import type { ProjectSettings } from '../lib/api';
-import { getAboutPath, getArticlesPath, getBasePath, getInvestPath, getKycAmlPath, getMintPath, getPortfolioPath, getPrivacyPolicyPath, getSwapPath, getTermsOfServicePath, getWhitepaperPath } from '../lib/routes';
+import { getAboutPath, getArticlesPath, getBasePath, getInvestPath, getKycAmlPath, getMintPath, getPortfolioPath, getPrivacyPolicyPath, getSwapPath, getTermsOfServicePath, getTokensPath, getWhitepaperPath } from '../lib/routes';
 
 type FooterProps = {
   project: ProjectSettings;
-  currentPage?: 'home' | 'articles' | 'article' | 'swap' | 'mint' | 'invest' | 'portfolio' | 'about' | 'whitepaper' | 'privacy-policy' | 'terms-of-service' | 'kyc-aml';
+  currentPage?: 'home' | 'articles' | 'article' | 'swap' | 'mint' | 'invest' | 'portfolio' | 'about' | 'whitepaper' | 'privacy-policy' | 'terms-of-service' | 'kyc-aml' | 'token-admin';
 };
 
 export function Footer({ project, currentPage = 'home' }: FooterProps) {
@@ -25,6 +25,7 @@ export function Footer({ project, currentPage = 'home' }: FooterProps) {
   const mintHref = getMintPath();
   const termsOfServiceHref = getTermsOfServicePath();
   const whitepaperHref = getWhitepaperPath();
+  const tokensHref = getTokensPath();
   const homeSectionHref = (section: string) => (currentPage === 'home' ? section : `${basePath}${section}`);
   const { messages } = useI18n();
   const shouldShowLogo = Boolean(logoUrl) && !logoError;
@@ -60,7 +61,7 @@ export function Footer({ project, currentPage = 'home' }: FooterProps) {
         <div className="absolute -left-20 bottom-0 h-64 w-64 rounded-full bg-violet-600/[0.04] blur-3xl" />
         <div className="absolute -right-16 top-10 h-56 w-56 rounded-full bg-teal-500/[0.05] blur-3xl" />
       </div>
-      <div className="relative mx-auto mb-12 grid max-w-7xl gap-12 px-6 md:grid-cols-4">
+      <div className="relative mx-auto mb-12 grid max-w-7xl gap-12 px-6 md:grid-cols-5">
         <div className="col-span-2 space-y-6">
           <div className="flex items-center gap-3">
             {shouldShowLogo ? (
@@ -126,6 +127,15 @@ export function Footer({ project, currentPage = 'home' }: FooterProps) {
           </a>
           <a href={articlesHref} className="block text-sm tracking-wide text-slate-500 transition-colors duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:text-teal-100/95">
             {messages.footer.articles}
+          </a>
+        </div>
+
+        <div className="space-y-4">
+          <h4 className="mb-6 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+            {messages.footer.adminPanel}
+          </h4>
+          <a href={tokensHref} className="block text-sm tracking-wide text-slate-500 transition-colors duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:text-teal-100/95">
+            {messages.navbar.tokens}
           </a>
           <a href={mintHref} className="block text-sm tracking-wide text-slate-500 transition-colors duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:text-teal-100/95">
             {messages.footer.rwaMint}

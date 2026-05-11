@@ -11,6 +11,9 @@ import {
   SUI_PACKAGE_ID,
   SUI_POSITION_ID,
   SUI_REGISTRY_ID,
+  SUI_SHARE_ADMIN_CAP_ID,
+  SUI_SHARE_CONFIG_ID,
+  SUI_SHARE_TREASURY_CAP_ID,
   SUI_PYTH_OBJECT_ID,
   SUI_STRATEGY_ID,
   resolveSuiSwapRpcUrl,
@@ -107,13 +110,16 @@ export const SUI_FUND_CONFIG = {
   packageId: AV8_PACKAGE_ID,
   basketId: AV8_BASKET_ID,
   registryId: AV8_REGISTRY_ID,
-  adminCapId: SUI_ADMIN_CAP_ID,
+  adminCapId: SUI_ADMIN_CAP_ID || AV8_OWNER_CAP_ID,
   rwaPackageId: SUI_RWA_PACKAGE_ID,
   rwaAdminCapId: SUI_RWA_ADMIN_CAP_ID,
   managerCapId: AV8_MANAGER_CAP_ID,
   strategyManagerCapId: AV8_STRATEGY_MANAGER_CAP_ID, // New field
   strategyId: AV8_STRATEGY_ID,
   positionId: AV8_POSITION_ID,
+  shareConfigId: SUI_SHARE_CONFIG_ID,
+  shareAdminCapId: SUI_SHARE_ADMIN_CAP_ID,
+  shareTreasuryCapId: SUI_SHARE_TREASURY_CAP_ID,
   googleClientId: SUI_GOOGLE_CLIENT_ID,
   pythObjectId: PYTH_OBJECT_ID, // New field
 };

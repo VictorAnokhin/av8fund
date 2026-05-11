@@ -96,7 +96,7 @@ function getEthereumProvider(kind: 'metamask' | 'rabby'): Eip1193Provider | null
 
 type NavbarProps = {
   project: ProjectSettings;
-  currentPage?: 'home' | 'articles' | 'article' | 'swap' | 'mint' | 'invest' | 'portfolio' | 'about' | 'whitepaper' | 'privacy-policy' | 'terms-of-service' | 'kyc-aml';
+  currentPage?: 'home' | 'articles' | 'article' | 'swap' | 'mint' | 'invest' | 'portfolio' | 'about' | 'whitepaper' | 'privacy-policy' | 'terms-of-service' | 'kyc-aml' | 'token-admin';
 };
 
 export function Navbar({ project, currentPage = 'home' }: NavbarProps) {
@@ -149,6 +149,8 @@ export function Navbar({ project, currentPage = 'home' }: NavbarProps) {
   const shouldShowLogo = Boolean(logoUrl) && !logoError;
   const hasIdentitySession = Boolean(identitySession?.token && identitySession?.user);
   const hasAnyWalletConnection = Boolean(currentAccount?.address) || Boolean(externalSession) || hasIdentitySession;
+  /** Laravel Google session alone does not lock; any dapp-kit / persisted external wallet session does. */
+  const isHeaderNetworkLockedByWallet = Boolean(currentAccount?.address) || Boolean(externalSession);
   const externalSessionAddress = getExternalSessionAddress(externalSession);
   const identityWallets = React.useMemo(() => {
     const user = identitySession?.user;
@@ -357,6 +359,12 @@ export function Navbar({ project, currentPage = 'home' }: NavbarProps) {
       window.removeEventListener('storage', onStorage);
     };
   }, []);
+
+  React.useEffect(() => {
+    if (isHeaderNetworkLockedByWallet) {
+      setIsChainMenuOpen(false);
+    }
+  }, [isHeaderNetworkLockedByWallet]);
 
   const linkEvmWalletToAccount = React.useCallback(async (provider: Eip1193Provider, address: string) => {
     if (!identitySession?.token) {
@@ -709,14 +717,27 @@ export function Navbar({ project, currentPage = 'home' }: NavbarProps) {
           <div className="relative" ref={chainMenuRefDesktop}>
             <button
               type="button"
-              aria-label={`${messages.navbar.networkScopeHint}: ${selectedNetworkLabel}`}
-              aria-expanded={isChainMenuOpen}
+              aria-label={
+                isHeaderNetworkLockedByWallet
+                  ? `${messages.navbar.networkScopeHint}: ${selectedNetworkLabel}. ${messages.navbar.networkLockedHint}`
+                  : `${messages.navbar.networkScopeHint}: ${selectedNetworkLabel}`
+              }
+              aria-expanded={isHeaderNetworkLockedByWallet ? false : isChainMenuOpen}
               aria-haspopup="listbox"
+              disabled={isHeaderNetworkLockedByWallet}
+              title={isHeaderNetworkLockedByWallet ? messages.navbar.networkLockedHint : undefined}
               onClick={() => {
+                if (isHeaderNetworkLockedByWallet) {
+                  return;
+                }
                 setIsChainMenuOpen((v) => !v);
                 setIsLanguageOpen(false);
               }}
-              className="inline-flex h-11 items-center gap-1 rounded-xl border border-white/[0.09] bg-white/[0.04] px-3 text-sm font-bold tracking-wider text-white shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] transition-[background,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:border-teal-400/25 hover:bg-white/[0.07]"
+              className={`inline-flex h-11 items-center gap-1 rounded-xl border border-white/[0.09] bg-white/[0.04] px-3 text-sm font-bold tracking-wider text-white shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] transition-[background,border-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                isHeaderNetworkLockedByWallet
+                  ? 'cursor-not-allowed opacity-60'
+                  : 'hover:border-teal-400/25 hover:bg-white/[0.07]'
+              }`}
             >
               {headerNetworkAbbrev(selectedNetwork)}
               <ChevronDown
@@ -725,7 +746,7 @@ export function Navbar({ project, currentPage = 'home' }: NavbarProps) {
               />
             </button>
             <AnimatePresence>
-              {isChainMenuOpen ? (
+              {isChainMenuOpen && !isHeaderNetworkLockedByWallet ? (
                 <motion.div
                   initial={{ opacity: 0, y: -6 }}
                   animate={{ opacity: 1, y: 0 }}
@@ -782,14 +803,27 @@ export function Navbar({ project, currentPage = 'home' }: NavbarProps) {
           <div className="relative" ref={chainMenuRefMobile}>
             <button
               type="button"
-              aria-label={`${messages.navbar.networkScopeHint}: ${selectedNetworkLabel}`}
-              aria-expanded={isChainMenuOpen}
+              aria-label={
+                isHeaderNetworkLockedByWallet
+                  ? `${messages.navbar.networkScopeHint}: ${selectedNetworkLabel}. ${messages.navbar.networkLockedHint}`
+                  : `${messages.navbar.networkScopeHint}: ${selectedNetworkLabel}`
+              }
+              aria-expanded={isHeaderNetworkLockedByWallet ? false : isChainMenuOpen}
               aria-haspopup="listbox"
+              disabled={isHeaderNetworkLockedByWallet}
+              title={isHeaderNetworkLockedByWallet ? messages.navbar.networkLockedHint : undefined}
               onClick={() => {
+                if (isHeaderNetworkLockedByWallet) {
+                  return;
+                }
                 setIsChainMenuOpen((v) => !v);
                 setIsLanguageOpen(false);
               }}
-              className="inline-flex h-11 min-w-[3rem] items-center justify-center gap-0.5 rounded-xl border border-white/[0.09] bg-white/[0.04] px-2.5 text-sm font-bold tracking-wider text-white shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] transition-[background,border-color] duration-300 hover:border-teal-400/25 hover:bg-white/[0.07]"
+              className={`inline-flex h-11 min-w-[3rem] items-center justify-center gap-0.5 rounded-xl border border-white/[0.09] bg-white/[0.04] px-2.5 text-sm font-bold tracking-wider text-white shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06)] transition-[background,border-color] duration-300 ${
+                isHeaderNetworkLockedByWallet
+                  ? 'cursor-not-allowed opacity-60'
+                  : 'hover:border-teal-400/25 hover:bg-white/[0.07]'
+              }`}
             >
               {headerNetworkAbbrev(selectedNetwork)}
               <ChevronDown
@@ -798,7 +832,7 @@ export function Navbar({ project, currentPage = 'home' }: NavbarProps) {
               />
             </button>
             <AnimatePresence>
-              {isChainMenuOpen ? (
+              {isChainMenuOpen && !isHeaderNetworkLockedByWallet ? (
                 <motion.div
                   initial={{ opacity: 0, y: -6 }}
                   animate={{ opacity: 1, y: 0 }}

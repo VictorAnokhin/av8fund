@@ -22,6 +22,7 @@ import {
   type AiLogEntry,
   type FundSnapshot,
 } from '../lib/suiFund';
+import { getFundTokens, type FundTokenRecord } from '../lib/api';
 import {
   EXTERNAL_WALLET_SESSION_EVENT,
   getExternalSessionAddress,
@@ -48,6 +49,11 @@ type SuiFundDashboardState = {
   zkLoginReady: boolean;
   hasWalletConnection: boolean;
   investAmount: string;
+  depositToken: DepositTokenOption;
+  depositTokenOptions: DepositTokenOption[];
+  setDepositTokenSymbol: (symbol: string) => void;
+  expectedAv8Label: string;
+  formatDepositTokenBalance: (token: DepositTokenOption) => string;
   redeemAmount: string;
   investBalanceLabel: string;
   redeemBalanceLabel: string;
@@ -61,18 +67,66 @@ type SuiFundDashboardState = {
 };
 
 const FUND_MODULE = 'portfolio';
-const SHARE_TYPE = `${SUI_FUND_CONFIG.packageId}::${FUND_MODULE}::SHARE`;
-const USDC_COIN_TYPE = '0x5dcdb5cda286590bc93d74546377d4a367e91d573041d8e137f7119041a79851::usdc::USDC';
-const USDC_DECIMALS = 6;
-const SHARE_DECIMALS = 6;
+const SHARE_TYPE = `${SUI_FUND_CONFIG.packageId}::fund_share::FUND_SHARE`;
+const SUI_COIN_TYPE = '0x2::sui::SUI';
+const SUI_DECIMALS = 9;
+const SHARE_DECIMALS = 9;
+const ACTIVE_WALLET_KEY = 'av8fund.active-wallet';
+const ACTIVE_WALLET_EVENT = 'av8fund:active-wallet';
+
+type DepositTokenOption = {
+  symbol: string;
+  name: string;
+  coinType: string;
+  decimals: number;
+  balance: bigint;
+  enabled: boolean;
+  executable: boolean;
+  whitelisted: boolean;
+};
 
 type CoinLike = {
   coinObjectId: string;
   balance: string;
 };
 
+type WalletCoinBalance = {
+  coinType: string;
+  balance: bigint;
+};
+
 function ensure0x(value: string): string {
   return value.startsWith('0x') ? value : `0x${value}`;
+}
+
+function sameSuiAddress(a?: string | null, b?: string | null): boolean {
+  const left = String(a || '').trim().toLowerCase();
+  const right = String(b || '').trim().toLowerCase();
+  return Boolean(left && right && left === right);
+}
+
+function readActiveSuiWalletAddress(): string {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  try {
+    const raw = window.localStorage.getItem(ACTIVE_WALLET_KEY);
+    if (!raw) {
+      return '';
+    }
+
+    const payload = JSON.parse(raw) as { address?: unknown; isSui?: unknown; network?: unknown };
+    const address = typeof payload.address === 'string' ? payload.address.trim() : '';
+    const network = typeof payload.network === 'string' ? payload.network.trim().toLowerCase() : '';
+    if (!address || (payload.isSui !== true && network !== 'sui')) {
+      return '';
+    }
+
+    return address;
+  } catch {
+    return '';
+  }
 }
 
 function parseDecimalAmount(value: string, decimals: number): bigint | null {
@@ -102,6 +156,46 @@ function formatTokenBalance(balance: bigint, decimals: number, suffix: string): 
   return `${formatted} ${suffix}`;
 }
 
+function defaultDepositToken(): DepositTokenOption {
+  return {
+    symbol: 'SUI',
+    name: 'Sui',
+    coinType: SUI_COIN_TYPE,
+    decimals: SUI_DECIMALS,
+    balance: 0n,
+    enabled: true,
+    executable: true,
+    whitelisted: true,
+  };
+}
+
+function tokenFromFundRecord(record: FundTokenRecord, balance = 0n): DepositTokenOption {
+  const normalizedCoinType = record.coin_type.trim();
+  const isSui = normalizedCoinType.toLowerCase() === SUI_COIN_TYPE.toLowerCase();
+  return {
+    symbol: record.symbol || normalizedCoinType,
+    name: record.name || record.symbol || normalizedCoinType,
+    coinType: normalizedCoinType,
+    decimals: Number.isFinite(record.decimals) ? record.decimals : SUI_DECIMALS,
+    balance,
+    enabled: Boolean(record.enabled),
+    executable: isSui,
+    whitelisted: true,
+  };
+}
+
+async function fetchAllCoinBalances(
+  client: ReturnType<typeof useSuiClient>,
+  owner: string,
+): Promise<WalletCoinBalance[]> {
+  const balances = await client.getAllBalances({ owner });
+
+  return balances.map((item) => ({
+    coinType: item.coinType,
+    balance: BigInt(item.totalBalance),
+  }));
+}
+
 async function fetchAllCoins(
   client: ReturnType<typeof useSuiClient>,
   owner: string,
@@ -127,6 +221,41 @@ async function fetchAllCoins(
   } while (cursor);
 
   return coins;
+}
+
+async function findOwnedPositionId(
+  client: ReturnType<typeof useSuiClient>,
+  owner: string,
+): Promise<string | null> {
+  if (!SUI_FUND_CONFIG.packageId) {
+    return null;
+  }
+
+  const positionType = `${ensure0x(SUI_FUND_CONFIG.packageId)}::${FUND_MODULE}::Position`;
+  let cursor: string | null | undefined = null;
+
+  do {
+    const page = await client.getOwnedObjects({
+      owner,
+      cursor,
+      limit: 50,
+      filter: {
+        StructType: positionType,
+      },
+      options: {
+        showType: true,
+      },
+    });
+
+    const match = page.data.find((item) => item.data?.objectId);
+    if (match?.data?.objectId) {
+      return match.data.objectId;
+    }
+
+    cursor = page.hasNextPage ? page.nextCursor : null;
+  } while (cursor);
+
+  return null;
 }
 
 function buildCoinArgument(
@@ -181,8 +310,12 @@ export function useSuiFundDashboard(): SuiFundDashboardState {
   const { currentWallet, connectionStatus } = useCurrentWallet();
   const [hasExternalWalletSession, setHasExternalWalletSession] = React.useState(false);
   const [externalWalletAddress, setExternalWalletAddress] = React.useState('');
+  const [activeSuiWalletAddress, setActiveSuiWalletAddress] = React.useState(() => readActiveSuiWalletAddress());
   const [hasZkLoginSession, setHasZkLoginSession] = React.useState(false);
   const [investAmount, setInvestAmount] = React.useState('1');
+  const [depositTokenSymbol, setDepositTokenSymbol] = React.useState(SUI_COIN_TYPE);
+  const [depositTokenOptions, setDepositTokenOptions] = React.useState<DepositTokenOption[]>([defaultDepositToken()]);
+  const [fundTokenRecords, setFundTokenRecords] = React.useState<FundTokenRecord[]>([]);
   const [redeemAmount, setRedeemAmount] = React.useState('1');
   const [investBalance, setInvestBalance] = React.useState<bigint>(0n);
   const [redeemBalance, setRedeemBalance] = React.useState<bigint>(0n);
@@ -194,6 +327,165 @@ export function useSuiFundDashboard(): SuiFundDashboardState {
   });
   const [liveLogs, setLiveLogs] = React.useState<AiLogEntry[]>([]);
   const signAndExecuteTransaction = useSignAndExecuteTransaction();
+  const currentOwnerAddress = activeSuiWalletAddress || account?.address || externalWalletAddress;
+
+  React.useEffect(() => {
+    function syncActiveWallet() {
+      setActiveSuiWalletAddress(readActiveSuiWalletAddress());
+    }
+
+    syncActiveWallet();
+
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.addEventListener(ACTIVE_WALLET_EVENT, syncActiveWallet as EventListener);
+    window.addEventListener('storage', syncActiveWallet);
+
+    return () => {
+      window.removeEventListener(ACTIVE_WALLET_EVENT, syncActiveWallet as EventListener);
+      window.removeEventListener('storage', syncActiveWallet);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    async function loadDepositTokens() {
+      try {
+        const records = await getFundTokens({
+          network: SUI_FUND_CONFIG.network,
+          packageId: SUI_FUND_CONFIG.packageId || undefined,
+          includeDisabled: false,
+        });
+        if (cancelled) {
+          return;
+        }
+
+        setFundTokenRecords(records.filter((record) => record.enabled));
+      } catch {
+        if (!cancelled) {
+          setFundTokenRecords([]);
+        }
+      }
+    }
+
+    void loadDepositTokens();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!currentOwnerAddress) {
+      setDepositTokenOptions([defaultDepositToken()]);
+      setDepositTokenSymbol(SUI_COIN_TYPE);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadWalletTokens() {
+      try {
+        setBalancesLoading(true);
+        const walletBalances = await fetchAllCoinBalances(client, currentOwnerAddress);
+        const whitelistByType = new Map(
+          fundTokenRecords.map((record) => [record.coin_type.trim().toLowerCase(), record]),
+        );
+
+        const tokens = await Promise.all(walletBalances.map(async ({ coinType, balance }) => {
+          const whitelistRecord = whitelistByType.get(coinType.toLowerCase());
+          if (whitelistRecord) {
+            return tokenFromFundRecord(whitelistRecord, balance);
+          }
+
+          if (coinType.toLowerCase() === SUI_COIN_TYPE.toLowerCase()) {
+            return { ...defaultDepositToken(), balance };
+          }
+
+          const metadata = await client.getCoinMetadata({ coinType }).catch(() => null);
+          return {
+            symbol: metadata?.symbol || coinType.split('::').pop() || coinType,
+            name: metadata?.name || metadata?.symbol || coinType,
+            coinType,
+            decimals: Number.isFinite(metadata?.decimals) ? Number(metadata?.decimals) : 0,
+            balance,
+            enabled: false,
+            executable: false,
+            whitelisted: false,
+          };
+        }));
+
+        const hasSui = tokens.some((token) => token.coinType.toLowerCase() === SUI_COIN_TYPE.toLowerCase());
+        if (!hasSui) {
+          tokens.unshift(defaultDepositToken());
+        }
+
+        tokens.sort((a, b) => {
+          const aSui = a.coinType.toLowerCase() === SUI_COIN_TYPE.toLowerCase();
+          const bSui = b.coinType.toLowerCase() === SUI_COIN_TYPE.toLowerCase();
+          if (aSui !== bSui) {
+            return aSui ? -1 : 1;
+          }
+          if (a.whitelisted !== b.whitelisted) {
+            return a.whitelisted ? -1 : 1;
+          }
+          return a.symbol.localeCompare(b.symbol);
+        });
+
+        if (cancelled) {
+          return;
+        }
+
+        setDepositTokenOptions(tokens);
+        setDepositTokenSymbol((current) => (
+          tokens.some((token) => token.coinType === current)
+            ? current
+            : tokens[0]?.coinType ?? SUI_COIN_TYPE
+        ));
+      } catch {
+        if (!cancelled) {
+          setDepositTokenOptions([defaultDepositToken()]);
+          setDepositTokenSymbol(SUI_COIN_TYPE);
+        }
+      } finally {
+        if (!cancelled) {
+          setBalancesLoading(false);
+        }
+      }
+    }
+
+    void loadWalletTokens();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [client, currentOwnerAddress, fundTokenRecords]);
+
+  const depositToken = React.useMemo(
+    () => depositTokenOptions.find((token) => token.coinType === depositTokenSymbol) ?? depositTokenOptions[0] ?? defaultDepositToken(),
+    [depositTokenOptions, depositTokenSymbol],
+  );
+
+  const expectedAv8Label = React.useMemo(() => {
+    const parsed = parseDecimalAmount(investAmount, depositToken.decimals);
+    if (parsed === null || parsed <= 0n) {
+      return '0 AV8';
+    }
+
+    if (depositToken.symbol === 'SUI') {
+      return formatTokenBalance(parsed, SUI_DECIMALS, 'AV8');
+    }
+
+    return 'Calculated after oracle quote';
+  }, [depositToken.decimals, depositToken.symbol, investAmount]);
+
+  const formatDepositTokenBalance = React.useCallback(
+    (token: DepositTokenOption) => formatTokenBalance(token.balance, token.decimals, token.symbol),
+    [],
+  );
 
   React.useEffect(() => {
     function syncExternalSession() {
@@ -345,8 +637,6 @@ export function useSuiFundDashboard(): SuiFundDashboardState {
       ? rpcQueryError
       : null;
 
-  const currentOwnerAddress = account?.address || externalWalletAddress;
-
   React.useEffect(() => {
     if (!currentOwnerAddress) {
       setInvestBalance(0n);
@@ -361,8 +651,8 @@ export function useSuiFundDashboard(): SuiFundDashboardState {
       try {
         setBalancesLoading(true);
 
-        const [usdcCoins, shareCoins] = await Promise.all([
-          fetchAllCoins(client, currentOwnerAddress, USDC_COIN_TYPE),
+        const [depositCoins, shareCoins] = await Promise.all([
+          fetchAllCoins(client, currentOwnerAddress, depositToken.coinType),
           fetchAllCoins(client, currentOwnerAddress, ensure0x(SHARE_TYPE)),
         ]);
 
@@ -370,7 +660,13 @@ export function useSuiFundDashboard(): SuiFundDashboardState {
           return;
         }
 
-        setInvestBalance(usdcCoins.reduce((sum, coin) => sum + BigInt(coin.balance), 0n));
+        const nextInvestBalance = depositCoins.reduce((sum, coin) => sum + BigInt(coin.balance), 0n);
+        setInvestBalance(nextInvestBalance);
+        setDepositTokenOptions((current) => current.map((token) => (
+          token.coinType === depositToken.coinType
+            ? { ...token, balance: nextInvestBalance }
+            : token
+        )));
         setRedeemBalance(shareCoins.reduce((sum, coin) => sum + BigInt(coin.balance), 0n));
       } catch {
         if (cancelled) {
@@ -391,10 +687,10 @@ export function useSuiFundDashboard(): SuiFundDashboardState {
     return () => {
       cancelled = true;
     };
-  }, [client, currentOwnerAddress]);
+  }, [client, currentOwnerAddress, depositToken.coinType]);
 
   const executeSignedTransaction = React.useCallback(async (transaction: Transaction) => {
-    if (account?.address) {
+    if (sameSuiAddress(account?.address, currentOwnerAddress)) {
       const result = await signAndExecuteTransaction.mutateAsync({ transaction });
       if ('digest' in result && typeof result.digest === 'string') {
         return result.digest;
@@ -404,8 +700,11 @@ export function useSuiFundDashboard(): SuiFundDashboardState {
     }
 
     const zkSession = readZkLoginSession();
-    if (!zkSession) {
-      throw new Error('zkLogin session is missing. Sign in with Google again.');
+    if (!sameSuiAddress(zkSession?.walletAddress, currentOwnerAddress)) {
+      if (account?.address && !sameSuiAddress(account.address, currentOwnerAddress)) {
+        throw new Error('The connected Sui wallet does not match the selected active wallet. Switch wallet or select the connected address.');
+      }
+      throw new Error('No signing method is available for the selected wallet. Connect the Sui wallet or sign in with Google zkLogin again.');
     }
 
     const signer = Ed25519Keypair.fromSecretKey(zkSession.ephemeralPrivateKey);
@@ -431,7 +730,7 @@ export function useSuiFundDashboard(): SuiFundDashboardState {
     }
 
     return result.digest;
-  }, [account?.address, client, signAndExecuteTransaction]);
+  }, [account?.address, client, currentOwnerAddress, signAndExecuteTransaction]);
 
   const executeInvest = React.useCallback(async () => {
     if (!currentOwnerAddress) {
@@ -452,11 +751,22 @@ export function useSuiFundDashboard(): SuiFundDashboardState {
       return;
     }
 
-    const amount = parseDecimalAmount(investAmount, USDC_DECIMALS);
+    if (!depositToken.executable) {
+      setActionState({
+        busy: false,
+        error: depositToken.whitelisted
+          ? `${depositToken.symbol} is whitelisted for the fund, but client deposits for this asset require portfolio.deposit_asset<T> integration and an oracle value.`
+          : `${depositToken.symbol} is in the active wallet, but it is not whitelisted for fund deposits.`,
+        lastDigest: null,
+      });
+      return;
+    }
+
+    const amount = parseDecimalAmount(investAmount, depositToken.decimals);
     if (amount === null || amount <= 0n) {
       setActionState({
         busy: false,
-        error: 'Enter a valid USDC amount greater than zero.',
+        error: `Enter a valid ${depositToken.symbol} amount greater than zero.`,
         lastDigest: null,
       });
       return;
@@ -465,25 +775,33 @@ export function useSuiFundDashboard(): SuiFundDashboardState {
     setActionState({ busy: true, error: null, lastDigest: null });
 
     try {
-      const ownerCoins = await fetchAllCoins(client, currentOwnerAddress, USDC_COIN_TYPE);
+      if (!SUI_FUND_CONFIG.shareConfigId) {
+        throw new Error('ShareConfig object ID is required before SUI deposit can mint AV8.');
+      }
+
+      const ownerCoins = await fetchAllCoins(client, currentOwnerAddress, depositToken.coinType);
       if (!ownerCoins.length) {
-        throw new Error(`No ${USDC_COIN_TYPE} coins were found in the connected wallet.`);
+        throw new Error(`No ${depositToken.symbol} coins were found in the connected wallet.`);
       }
 
       const totalBalance = ownerCoins.reduce((sum, coin) => sum + BigInt(coin.balance), 0n);
       if (totalBalance < amount) {
-        throw new Error(`Insufficient USDC balance. Requested ${investAmount}, available ${(Number(totalBalance) / 10 ** USDC_DECIMALS).toFixed(6)}.`);
+        throw new Error(`Insufficient ${depositToken.symbol} balance. Requested ${investAmount}, available ${(Number(totalBalance) / 10 ** depositToken.decimals).toFixed(Math.min(depositToken.decimals, 9))}.`);
       }
 
       const transaction = new Transaction();
       transaction.setSender(currentOwnerAddress);
 
-      const depositCoin = buildCoinArgument(transaction, ownerCoins, amount);
+      const [suiDepositCoin] = transaction.splitCoins(transaction.gas, [transaction.pure.u64(amount)]);
+      const depositCoin = depositToken.coinType.toLowerCase() === SUI_COIN_TYPE.toLowerCase()
+        ? suiDepositCoin
+        : buildCoinArgument(transaction, ownerCoins, amount);
       transaction.moveCall({
-        target: `${ensure0x(SUI_FUND_CONFIG.packageId)}::${FUND_MODULE}::deposit`,
+        target: `${ensure0x(SUI_FUND_CONFIG.packageId)}::${FUND_MODULE}::deposit_sui_for_av8`,
         arguments: [
           transaction.object(ensure0x(SUI_FUND_CONFIG.registryId)),
           transaction.object(ensure0x(SUI_FUND_CONFIG.basketId)),
+          transaction.object(ensure0x(SUI_FUND_CONFIG.shareConfigId)),
           depositCoin,
         ],
       });
@@ -504,7 +822,7 @@ export function useSuiFundDashboard(): SuiFundDashboardState {
         lastDigest: null,
       });
     }
-  }, [client, currentOwnerAddress, executeSignedTransaction, investAmount]);
+  }, [client, currentOwnerAddress, depositToken, executeSignedTransaction, investAmount]);
 
   const executeRedeem = React.useCallback(async () => {
     if (!currentOwnerAddress) {
@@ -538,6 +856,10 @@ export function useSuiFundDashboard(): SuiFundDashboardState {
     setActionState({ busy: true, error: null, lastDigest: null });
 
     try {
+      if (!SUI_FUND_CONFIG.shareConfigId) {
+        throw new Error('ShareConfig object ID is required before AV8 redeem can execute.');
+      }
+
       const shareCoins = await fetchAllCoins(client, currentOwnerAddress, ensure0x(SHARE_TYPE));
       if (!shareCoins.length) {
         throw new Error('No AV8 share coins were found in the connected wallet.');
@@ -551,11 +873,11 @@ export function useSuiFundDashboard(): SuiFundDashboardState {
       const transaction = new Transaction();
       transaction.setSender(currentOwnerAddress);
 
-      const shareCoin = buildCoinArgument(transaction, shareCoins, amount);
       transaction.moveCall({
-        target: `${ensure0x(SUI_FUND_CONFIG.packageId)}::${FUND_MODULE}::withdraw`,
+        target: `${ensure0x(SUI_FUND_CONFIG.packageId)}::${FUND_MODULE}::redeem_sui_with_av8`,
         arguments: [
           transaction.object(ensure0x(SUI_FUND_CONFIG.basketId)),
+          transaction.object(ensure0x(SUI_FUND_CONFIG.shareConfigId)),
           shareCoin,
         ],
       });
@@ -586,10 +908,15 @@ export function useSuiFundDashboard(): SuiFundDashboardState {
     walletLabel: shortAddress(account?.address || externalWalletAddress),
     walletName: currentWallet?.name ?? 'Sui Wallet / zkLogin',
     zkLoginReady: Boolean(SUI_FUND_CONFIG.googleClientId && hasZkLoginSession),
-    hasWalletConnection: connectionStatus === 'connected' || hasExternalWalletSession,
+    hasWalletConnection: Boolean(currentOwnerAddress) || connectionStatus === 'connected' || hasExternalWalletSession,
     investAmount,
+    depositToken,
+    depositTokenOptions,
+    setDepositTokenSymbol,
+    expectedAv8Label,
+    formatDepositTokenBalance,
     redeemAmount,
-    investBalanceLabel: formatTokenBalance(investBalance, USDC_DECIMALS, 'USDC'),
+    investBalanceLabel: formatTokenBalance(investBalance, depositToken.decimals, depositToken.symbol),
     redeemBalanceLabel: formatTokenBalance(redeemBalance, SHARE_DECIMALS, 'AV8'),
     balancesLoading,
     setInvestAmount,

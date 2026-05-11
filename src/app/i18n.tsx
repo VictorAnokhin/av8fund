@@ -1,5 +1,8 @@
 import React from 'react';
 
+import type { TokenAdminCopy } from './lib/tokenAdminI18n';
+import { tokenAdminEn, tokenAdminRu, tokenAdminUa } from './lib/tokenAdminI18n';
+
 export type Language = 'en' | 'ua' | 'ru';
 
 type Translation = {
@@ -38,7 +41,11 @@ type Translation = {
     language: string;
     connectGoogle: string;
     connectWalletShort: string;
+    /** Admin / token registry link in main nav. */
+    tokens: string;
     networkScopeHint: string;
+    /** Shown when the chain menu is disabled because a wallet session is active. */
+    networkLockedHint: string;
     walletsForNetworkHint: string;
     /** Full chain names for the header network menu. */
     chainNames: {
@@ -341,6 +348,45 @@ type Translation = {
     aiStatusVerified: string;
     aiStatusPending: string;
     aiStatusFailed: string;
+    /** Deposit panel (wallet token → AV8) */
+    depositSectionKicker: string;
+    depositSectionTitle: string;
+    depositBadgeReady: string;
+    depositBadgeConfigured: string;
+    depositBadgeWalletAsset: string;
+    depositTokenInWalletLabel: string;
+    depositAssetFromWalletLabel: string;
+    depositTokenWhitelisted: string;
+    depositTokenNotWhitelisted: string;
+    depositAvailablePrefix: string;
+    depositAmountLabel: string;
+    depositAmountFieldLabel: string;
+    depositWalletBalanceLabel: string;
+    depositLoading: string;
+    depositExpectedIssueLabel: string;
+    depositPathLabel: string;
+    depositPathSui: string;
+    depositPathOracle: string;
+    /** Leading sentence before `<code>portfolio.deposit_asset&lt;T&gt;</code>`; use `{symbol}` placeholder. */
+    depositNoticeWhitelistedLead: string;
+    depositNoticeNotWhitelistedLead: string;
+    depositNoticeTrail: string;
+    depositSigning: string;
+    /** CTA; use `{symbol}` placeholder. */
+    depositButton: string;
+    depositConnectedWallet: string;
+    depositWalletAsideBlurb: string;
+    /** Card title; `{symbol}` placeholder. */
+    depositAvailableTokenCard: string;
+    depositWalletDetectionHint: string;
+    depositAv8ShareCard: string;
+    depositAv8WithdrawHint: string;
+    depositAvailableInWalletPrefix: string;
+    redeemAv8ShareLabel: string;
+    depositPtbRouteLabel: string;
+    /** Cockpit deposit route notice; `{symbol}` placeholder. */
+    depositRouteBlockedWhitelisted: string;
+    depositRouteBlockedNotWhitelisted: string;
   };
   portfolio: {
     pageTitle: string;
@@ -542,6 +588,7 @@ type Translation = {
     analytics: string;
     ltvLoans: string;
     rwaMint: string;
+    adminPanel: string;
     legal: string;
     privacyPolicy: string;
     termsOfService: string;
@@ -555,6 +602,7 @@ type Translation = {
       website: string;
     };
   };
+  tokenAdmin: TokenAdminCopy;
 };
 
 const translations: Record<Language, Translation> = {
@@ -595,7 +643,9 @@ const translations: Record<Language, Translation> = {
       language: 'Language',
       connectGoogle: 'Google',
       connectWalletShort: 'Wallet',
+      tokens: 'Tokens',
       networkScopeHint: 'Network',
+      networkLockedHint: 'Disconnect your wallet to change the network.',
       walletsForNetworkHint: 'Wallets for this chain',
       chainNames: {
         eth: 'Ethereum',
@@ -648,7 +698,7 @@ const translations: Record<Language, Translation> = {
       linkCurrentSuiWallet: 'Save connected wallet to account',
       suiConnectNotInProfileHint:
         'Your extension is on an address that is not linked in the database yet. Confirm the signature to store it on the server.',
-      suiGoogleWalletsFilteredHint: 'With Google on Sui, only linked Sui addresses are shown.',
+      suiGoogleWalletsFilteredHint: 'On Sui, only linked Sui addresses are shown.',
       solanaLinkedWalletsFilteredHint: 'On Solana, only linked Solana addresses are shown.',
       evmLinkedWalletsFilteredHint: 'On this chain, only addresses linked for the selected network are shown.',
       connectZkLogin: 'Connect ZK Login',
@@ -1079,6 +1129,45 @@ const translations: Record<Language, Translation> = {
       aiStatusVerified: 'Verified',
       aiStatusPending: 'Pending',
       aiStatusFailed: 'Failed',
+      depositSectionKicker: 'Invest',
+      depositSectionTitle: 'Choose wallet asset and receive AV8',
+      depositBadgeReady: 'Ready',
+      depositBadgeConfigured: 'Configured',
+      depositBadgeWalletAsset: 'Wallet asset',
+      depositTokenInWalletLabel: 'Token in active wallet',
+      depositAssetFromWalletLabel: 'Asset from active wallet',
+      depositTokenWhitelisted: 'whitelisted',
+      depositTokenNotWhitelisted: 'not whitelisted',
+      depositAvailablePrefix: 'Available',
+      depositAmountLabel: 'Amount',
+      depositAmountFieldLabel: 'Deposit amount',
+      depositWalletBalanceLabel: 'Wallet balance',
+      depositLoading: 'Loading...',
+      depositExpectedIssueLabel: 'Expected issue',
+      depositPathLabel: 'Deposit path',
+      depositPathSui: 'SUI deposit',
+      depositPathOracle: 'Oracle quote required',
+      depositNoticeWhitelistedLead:
+        '{symbol} is whitelisted, but direct client deposits need ',
+      depositNoticeNotWhitelistedLead:
+        '{symbol} exists in the active wallet, but it is not whitelisted for the fund yet. Whitelist it first, then add ',
+      depositNoticeTrail: ' and oracle valuation before signing can be enabled.',
+      depositSigning: 'Signing...',
+      depositButton: 'Deposit {symbol}',
+      depositConnectedWallet: 'Connected wallet',
+      depositWalletAsideBlurb:
+        'AV8 issuance is displayed before signing. The current executable path deposits SUI into the portfolio; full atomic AV8 minting requires the deployed fund_share TreasuryCap to be wired into the portfolio deposit flow.',
+      depositAvailableTokenCard: 'Available {symbol}',
+      depositWalletDetectionHint: 'Detected in active Sui wallet or zkLogin session',
+      depositAv8ShareCard: 'Available AV8 Share',
+      depositAv8WithdrawHint: 'Ready for portfolio::withdraw when share coins exist',
+      depositAvailableInWalletPrefix: 'Available in wallet:',
+      redeemAv8ShareLabel: 'Redeem AV8 share',
+      depositPtbRouteLabel: 'PTB route:',
+      depositRouteBlockedWhitelisted:
+        '{symbol} requires portfolio.deposit_asset<T> and oracle valuation before deposit signing.',
+      depositRouteBlockedNotWhitelisted:
+        '{symbol} is in the wallet but is not whitelisted for fund deposits.',
     },
     portfolio: {
       pageTitle: 'Portfolio',
@@ -1291,6 +1380,7 @@ const translations: Record<Language, Translation> = {
       analytics: 'Analytics',
       ltvLoans: 'LTV Loans',
       rwaMint: 'RWA mint',
+      adminPanel: 'Admin panel',
       legal: 'Legal',
       privacyPolicy: 'Privacy Policy',
       termsOfService: 'Terms of Service',
@@ -1304,6 +1394,7 @@ const translations: Record<Language, Translation> = {
         website: 'Website',
       },
     },
+    tokenAdmin: tokenAdminEn,
   },
   ua: {
     breadcrumbs: {
@@ -1342,7 +1433,9 @@ const translations: Record<Language, Translation> = {
       language: 'Мова',
       connectGoogle: 'Google',
       connectWalletShort: 'Гаманець',
+      tokens: 'Токени',
       networkScopeHint: 'Мережа',
+      networkLockedHint: 'Щоб змінити мережу, відключіть гаманець.',
       walletsForNetworkHint: 'Гаманці для цієї мережі',
       chainNames: {
         eth: 'Ethereum',
@@ -1395,7 +1488,7 @@ const translations: Record<Language, Translation> = {
       linkCurrentSuiWallet: 'Зберегти підключений гаманець у профілі',
       suiConnectNotInProfileHint:
         'Активна адреса в гаманці ще не збережена на сервері. Підтвердіть підпис, щоб додати її до прив’язаних.',
-      suiGoogleWalletsFilteredHint: 'У Google на Sui показуються лише прив’язані Sui-адреси.',
+      suiGoogleWalletsFilteredHint: 'У мережі Sui показуються лише прив’язані Sui-адреси.',
       solanaLinkedWalletsFilteredHint: 'У мережі Solana показуються лише прив’язані Solana-адреси.',
       evmLinkedWalletsFilteredHint: 'У цій мережі показуються лише адреси, прив’язані для обраної мережі.',
       connectZkLogin: 'Підключити ZK Login',
@@ -1826,6 +1919,45 @@ const translations: Record<Language, Translation> = {
       aiStatusVerified: 'Підтверджено',
       aiStatusPending: 'В очікуванні',
       aiStatusFailed: 'Помилка',
+      depositSectionKicker: 'Інвестиції',
+      depositSectionTitle: 'Оберіть актив з гаманця та отримайте AV8',
+      depositBadgeReady: 'Готово',
+      depositBadgeConfigured: 'Налаштовано',
+      depositBadgeWalletAsset: 'Актив гаманця',
+      depositTokenInWalletLabel: 'Токен у активному гаманці',
+      depositAssetFromWalletLabel: 'Актив із активного гаманця',
+      depositTokenWhitelisted: 'у whitelist фонду',
+      depositTokenNotWhitelisted: 'не у whitelist фонду',
+      depositAvailablePrefix: 'Доступно',
+      depositAmountLabel: 'Сума',
+      depositAmountFieldLabel: 'Сума депозиту',
+      depositWalletBalanceLabel: 'Баланс гаманця',
+      depositLoading: 'Завантаження…',
+      depositExpectedIssueLabel: 'Очікуваний випуск',
+      depositPathLabel: 'Шлях депозиту',
+      depositPathSui: 'депозит SUI',
+      depositPathOracle: 'потрібна оракул-котирування',
+      depositNoticeWhitelistedLead:
+        '{symbol} у whitelist фонду, але прямі клієнтські депозити потребують ',
+      depositNoticeNotWhitelistedLead:
+        '{symbol} є в активному гаманці, але ще не у whitelist фонду. Спочатку додайте в whitelist, потім ',
+      depositNoticeTrail: ' та оцінку Oracle, перш ніж можна буде підписати транзакцію.',
+      depositSigning: 'Підпис…',
+      depositButton: 'Депозит {symbol}',
+      depositConnectedWallet: 'Підключений гаманець',
+      depositWalletAsideBlurb:
+        'Випуск AV8 показується перед підписом. Поточний робочий шлях вносить SUI в портфель; повне атомарне карбування AV8 потребує підключення TreasuryCap fund_share до потоку депозиту портфеля.',
+      depositAvailableTokenCard: 'Доступно {symbol}',
+      depositWalletDetectionHint: 'Виявлено в активному гаманці Sui або сесії zkLogin',
+      depositAv8ShareCard: 'Доступна частка AV8',
+      depositAv8WithdrawHint: 'Готово до portfolio::withdraw, коли є монети частки',
+      depositAvailableInWalletPrefix: 'Доступно в гаманці:',
+      redeemAv8ShareLabel: 'Повернення частки AV8',
+      depositPtbRouteLabel: 'Маршрут PTB:',
+      depositRouteBlockedWhitelisted:
+        '{symbol}: потрібні portfolio.deposit_asset<T> та оцінка Oracle перед підписом депозиту.',
+      depositRouteBlockedNotWhitelisted:
+        '{symbol} у гаманці, але не у whitelist для депозитів фонду.',
     },
     portfolio: {
       pageTitle: 'Портфель',
@@ -2038,6 +2170,7 @@ const translations: Record<Language, Translation> = {
       analytics: 'Аналітика',
       ltvLoans: 'LTV кредити',
       rwaMint: 'Мінт RWA',
+      adminPanel: 'Адмінпанель',
       legal: 'Правова інформація',
       privacyPolicy: 'Політика конфіденційності',
       termsOfService: 'Умови користування',
@@ -2051,6 +2184,7 @@ const translations: Record<Language, Translation> = {
         website: 'Сайт',
       },
     },
+    tokenAdmin: tokenAdminUa,
   },
   ru: {
     breadcrumbs: {
@@ -2089,7 +2223,9 @@ const translations: Record<Language, Translation> = {
       language: 'Язык',
       connectGoogle: 'Google',
       connectWalletShort: 'Кошелёк',
+      tokens: 'Токены',
       networkScopeHint: 'Сеть',
+      networkLockedHint: 'Чтобы сменить сеть, отключите кошелёк.',
       walletsForNetworkHint: 'Кошельки для этой сети',
       chainNames: {
         eth: 'Ethereum',
@@ -2142,7 +2278,7 @@ const translations: Record<Language, Translation> = {
       linkCurrentSuiWallet: 'Сохранить подключённый кошелёк в аккаунте',
       suiConnectNotInProfileHint:
         'Активный адрес в расширении ещё не записан в базе. Подтвердите подпись, чтобы сохранить привязку на сервере.',
-      suiGoogleWalletsFilteredHint: 'При входе через Google в сети Sui отображаются только привязанные Sui-адреса.',
+      suiGoogleWalletsFilteredHint: 'В сети Sui отображаются только привязанные Sui-адреса.',
       solanaLinkedWalletsFilteredHint: 'В сети Solana отображаются только привязанные Solana-адреса.',
       evmLinkedWalletsFilteredHint: 'В этой сети отображаются только адреса, привязанные к выбранной сети.',
       connectZkLogin: 'Подключить ZK Login',
@@ -2573,6 +2709,45 @@ const translations: Record<Language, Translation> = {
       aiStatusVerified: 'Подтверждено',
       aiStatusPending: 'В ожидании',
       aiStatusFailed: 'Сбой',
+      depositSectionKicker: 'Инвестиции',
+      depositSectionTitle: 'Выберите актив кошелька и получите AV8',
+      depositBadgeReady: 'Готово',
+      depositBadgeConfigured: 'Настроено',
+      depositBadgeWalletAsset: 'Актив кошелька',
+      depositTokenInWalletLabel: 'Токен в активном кошельке',
+      depositAssetFromWalletLabel: 'Актив из активного кошелька',
+      depositTokenWhitelisted: 'в whitelist фонда',
+      depositTokenNotWhitelisted: 'не в whitelist фонда',
+      depositAvailablePrefix: 'Доступно',
+      depositAmountLabel: 'Сумма',
+      depositAmountFieldLabel: 'Сумма депозита',
+      depositWalletBalanceLabel: 'Баланс кошелька',
+      depositLoading: 'Загрузка…',
+      depositExpectedIssueLabel: 'Ожидаемый выпуск',
+      depositPathLabel: 'Путь депозита',
+      depositPathSui: 'депозит SUI',
+      depositPathOracle: 'нужна котировка оракула',
+      depositNoticeWhitelistedLead:
+        '{symbol} в whitelist фонда, но прямые клиентские депозиты требуют ',
+      depositNoticeNotWhitelistedLead:
+        '{symbol} есть в активном кошельке, но пока не в whitelist фонда. Сначала добавьте в whitelist, затем ',
+      depositNoticeTrail: ' и оценку оракула, прежде чем можно будет подписать транзакцию.',
+      depositSigning: 'Подпись…',
+      depositButton: 'Депозит {symbol}',
+      depositConnectedWallet: 'Подключённый кошелёк',
+      depositWalletAsideBlurb:
+        'Выпуск AV8 показывается до подписи. Текущий рабочий путь вносит SUI в портфель; полное атомарное чеканение AV8 требует подключения TreasuryCap fund_share к потоку депозита портфеля.',
+      depositAvailableTokenCard: 'Доступно {symbol}',
+      depositWalletDetectionHint: 'Обнаружено в активном кошельке Sui или сессии zkLogin',
+      depositAv8ShareCard: 'Доступная доля AV8',
+      depositAv8WithdrawHint: 'Готово к portfolio::withdraw при наличии монет доли',
+      depositAvailableInWalletPrefix: 'Доступно в кошельке:',
+      redeemAv8ShareLabel: 'Вывод доли AV8',
+      depositPtbRouteLabel: 'Маршрут PTB:',
+      depositRouteBlockedWhitelisted:
+        '{symbol}: нужны portfolio.deposit_asset<T> и оценка оракула до подписи депозита.',
+      depositRouteBlockedNotWhitelisted:
+        '{symbol} в кошельке, но не в whitelist для депозитов фонда.',
     },
     portfolio: {
       pageTitle: 'Портфель',
@@ -2785,6 +2960,7 @@ const translations: Record<Language, Translation> = {
       analytics: 'Аналитика',
       ltvLoans: 'LTV кредиты',
       rwaMint: 'Минт RWA',
+      adminPanel: 'Админпанель',
       legal: 'Правовая информация',
       privacyPolicy: 'Политика конфиденциальности',
       termsOfService: 'Условия использования',
@@ -2798,6 +2974,7 @@ const translations: Record<Language, Translation> = {
         website: 'Сайт',
       },
     },
+    tokenAdmin: tokenAdminRu,
   },
 };
 

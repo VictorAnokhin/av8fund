@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import {
   SUI_NETWORK,
   SUI_RWA_ADMIN_CAP_ID,
+  SUI_RWA_ADMIN_REGISTRY_ID,
   SUI_RWA_PACKAGE_ID,
   SUI_UTILITY_PACKAGE_ID,
   SUI_UTILITY_TREASURY_CAP_ID,
@@ -464,7 +465,7 @@ export function MintPage() {
       await sleep(800);
       setPhaseLabel(messages.mint.phaseMove);
 
-      if (SUI_RWA_PACKAGE_ID && selectedAdminCapId && account?.address) {
+      if (SUI_RWA_PACKAGE_ID && SUI_RWA_ADMIN_REGISTRY_ID && selectedAdminCapId && account?.address) {
         const valuationSource = assetKind === 'universal' ? universalUsd : vehicleUsd;
         const initialUsd = Math.max(0, Math.round(Number.parseFloat(valuationSource) || 0));
         const assetName = assetKind === 'vehicle'
@@ -483,6 +484,7 @@ export function MintPage() {
           target: `${SUI_RWA_PACKAGE_ID}::rwa_core::mint_asset` as `${string}::${string}::${string}`,
           arguments: [
             tx.object(selectedAdminCapId),
+            tx.object(SUI_RWA_ADMIN_REGISTRY_ID),
             tx.pure.string(assetName),
             tx.pure.string(assetKind),
             tx.pure.string(identifier),
@@ -510,7 +512,7 @@ export function MintPage() {
         setMintedAssetId(findCreatedAssetNftId(transaction));
         setTxDigest(digest);
         setOfflineNote(null);
-      } else if (!SUI_RWA_PACKAGE_ID) {
+      } else if (!SUI_RWA_PACKAGE_ID || !SUI_RWA_ADMIN_REGISTRY_ID) {
         setOfflineNote(messages.mint.packageMissing);
       } else {
         setOfflineNote(messages.mint.nonVehicleNote);
@@ -545,6 +547,7 @@ export function MintPage() {
     selectedAdminCapId,
     signAndExecuteTransaction,
     suiClient,
+    SUI_RWA_ADMIN_REGISTRY_ID,
     SUI_RWA_PACKAGE_ID,
     universalTitle,
     universalUsd,
@@ -693,7 +696,7 @@ export function MintPage() {
     setAdminError(null);
     setAdminTxDigest(null);
 
-    if (!SUI_RWA_PACKAGE_ID || !selectedAdminCapId) {
+    if (!SUI_RWA_PACKAGE_ID || !SUI_RWA_ADMIN_REGISTRY_ID || !selectedAdminCapId) {
       setAdminError(messages.mint.adminCapMissing);
       return;
     }
@@ -714,7 +717,11 @@ export function MintPage() {
       const tx = new Transaction();
       tx.moveCall({
         target: `${SUI_RWA_PACKAGE_ID}::rwa_core::create_new_admin`,
-        arguments: [tx.object(selectedAdminCapId), tx.pure.address(recipient)],
+        arguments: [
+          tx.object(selectedAdminCapId),
+          tx.object(SUI_RWA_ADMIN_REGISTRY_ID),
+          tx.pure.address(recipient),
+        ],
       });
 
       const result = await signAndExecuteTransaction({ transaction: tx });
@@ -778,6 +785,7 @@ export function MintPage() {
       setAdminBusy(false);
     }
   }, [
+    SUI_RWA_ADMIN_REGISTRY_ID,
     SUI_RWA_PACKAGE_ID,
     account?.address,
     messages.mint.adminCapMissing,

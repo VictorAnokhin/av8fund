@@ -239,6 +239,7 @@ export type WalletProtocolsResponse = Record<string, WalletProtocolGroup>
 export type ResolvedUserWallet = {
   address: string
   network?: string | null
+  chain_id?: string | null
   connected_at?: string | null
   /** 1 = привязка через Google (zkLogin) / сгенерированный адрес; 0 = кошелёк (подпись расширения). */
   web3auth?: number
@@ -1351,4 +1352,268 @@ export async function deleteRwaAdminCap(id: number): Promise<void> {
     }
     throw new Error(message)
   }
+}
+
+export type FundTokenRecord = {
+  id: number
+  network: string
+  package_id: string
+  coin_type: string
+  symbol: string
+  name: string
+  decimals: number
+  target_weight_bps: number
+  min_weight_bps: number
+  max_weight_bps: number
+  price_feed_id: string
+  logo_url: string
+  enabled: boolean
+  notes: string
+  created_at: string | null
+  updated_at: string | null
+}
+
+export type FundTokenInput = {
+  network: string
+  packageId?: string
+  coinType: string
+  symbol: string
+  name: string
+  decimals: number
+  targetWeightBps: number
+  minWeightBps: number
+  maxWeightBps: number
+  priceFeedId?: string
+  logoUrl?: string
+  enabled: boolean
+  notes?: string
+}
+
+function toFundTokenPayload(input: FundTokenInput): Record<string, unknown> {
+  return {
+    network: input.network,
+    package_id: input.packageId || '',
+    coin_type: input.coinType,
+    symbol: input.symbol,
+    name: input.name,
+    decimals: input.decimals,
+    target_weight_bps: input.targetWeightBps,
+    min_weight_bps: input.minWeightBps,
+    max_weight_bps: input.maxWeightBps,
+    price_feed_id: input.priceFeedId || '',
+    logo_url: input.logoUrl || '',
+    enabled: input.enabled,
+    notes: input.notes || '',
+  }
+}
+
+async function parseApiError(response: Response, fallback: string): Promise<string> {
+  try {
+    const payload = (await response.json()) as { message?: string; errors?: Record<string, string[]> }
+    const firstFieldError = payload.errors ? Object.values(payload.errors).flat()[0] : ''
+    return firstFieldError || payload.message || fallback
+  } catch {
+    return fallback
+  }
+}
+
+export async function getFundTokens(input: {
+  network?: string
+  packageId?: string
+  includeDisabled?: boolean
+} = {}): Promise<FundTokenRecord[]> {
+  const params = new URLSearchParams()
+  if (input.network) {
+    params.set('network', input.network)
+  }
+  if (input.packageId) {
+    params.set('package_id', input.packageId)
+  }
+  if (input.includeDisabled !== undefined) {
+    params.set('include_disabled', input.includeDisabled ? '1' : '0')
+  }
+
+  const response = await fetch(toApiUrl(`/api/fund/tokens${params.toString() ? `?${params.toString()}` : ''}`), {
+    method: 'GET',
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/json',
+    },
+  })
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, `Failed to load fund tokens: ${response.status}`))
+  }
+
+  const payload = (await response.json()) as { data?: FundTokenRecord[] }
+  return Array.isArray(payload.data) ? payload.data : []
+}
+
+export async function saveFundToken(input: FundTokenInput, id?: number, options: { adminAddress?: string } = {}): Promise<FundTokenRecord> {
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  }
+  if (options.adminAddress) {
+    headers['X-Sui-Admin-Address'] = options.adminAddress
+  }
+
+  const response = await fetch(toApiUrl(id ? `/api/fund/tokens/${encodeURIComponent(String(id))}` : '/api/fund/tokens'), {
+    method: id ? 'PUT' : 'POST',
+    headers,
+    body: JSON.stringify(toFundTokenPayload(input)),
+  })
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, `Failed to save fund token: ${response.status}`))
+  }
+
+  const payload = (await response.json()) as { data?: FundTokenRecord }
+  if (!payload.data) {
+    throw new Error('Fund token response is empty')
+  }
+
+  return payload.data
+}
+
+export async function deleteFundToken(id: number, options: { adminAddress?: string } = {}): Promise<void> {
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+  }
+  if (options.adminAddress) {
+    headers['X-Sui-Admin-Address'] = options.adminAddress
+  }
+
+  const response = await fetch(toApiUrl(`/api/fund/tokens/${encodeURIComponent(String(id))}`), {
+    method: 'DELETE',
+    headers,
+  })
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, `Failed to delete fund token: ${response.status}`))
+  }
+}
+
+export type FundShareSettingsRecord = {
+  id: number | null
+  network: string
+  package_id: string
+  share_config_id: string
+  share_admin_cap_id: string
+  share_treasury_cap_id: string
+  pricing_model: 'nav_per_share' | 'manual_floor' | 'bonding_curve'
+  mint_fee_bps: number
+  redeem_fee_bps: number
+  redeem_burn_bps: number
+  price_impact_bps: number
+  min_price_sui: string
+  base_price_sui: string
+  max_supply: string
+  max_daily_mint: string
+  mint_paused: boolean
+  redeem_paused: boolean
+  notes: string
+  created_at: string | null
+  updated_at: string | null
+}
+
+export type FundShareSettingsInput = {
+  network: string
+  packageId?: string
+  shareConfigId?: string
+  shareAdminCapId?: string
+  shareTreasuryCapId?: string
+  pricingModel: 'nav_per_share' | 'manual_floor' | 'bonding_curve'
+  mintFeeBps: number
+  redeemFeeBps: number
+  redeemBurnBps: number
+  priceImpactBps: number
+  minPriceSui: string
+  basePriceSui: string
+  maxSupply: string
+  maxDailyMint: string
+  mintPaused: boolean
+  redeemPaused: boolean
+  notes?: string
+}
+
+function toFundShareSettingsPayload(input: FundShareSettingsInput): Record<string, unknown> {
+  return {
+    network: input.network,
+    package_id: input.packageId || '',
+    share_config_id: input.shareConfigId || '',
+    share_admin_cap_id: input.shareAdminCapId || '',
+    share_treasury_cap_id: input.shareTreasuryCapId || '',
+    pricing_model: input.pricingModel,
+    mint_fee_bps: input.mintFeeBps,
+    redeem_fee_bps: input.redeemFeeBps,
+    redeem_burn_bps: input.redeemBurnBps,
+    price_impact_bps: input.priceImpactBps,
+    min_price_sui: input.minPriceSui || '0',
+    base_price_sui: input.basePriceSui || '0',
+    max_supply: input.maxSupply || '0',
+    max_daily_mint: input.maxDailyMint || '0',
+    mint_paused: input.mintPaused,
+    redeem_paused: input.redeemPaused,
+    notes: input.notes || '',
+  }
+}
+
+export async function getFundShareSettings(input: {
+  network?: string
+  packageId?: string
+} = {}): Promise<FundShareSettingsRecord> {
+  const params = new URLSearchParams()
+  if (input.network) {
+    params.set('network', input.network)
+  }
+  if (input.packageId) {
+    params.set('package_id', input.packageId)
+  }
+
+  const response = await fetch(toApiUrl(`/api/fund/share-settings${params.toString() ? `?${params.toString()}` : ''}`), {
+    method: 'GET',
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/json',
+    },
+  })
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, `Failed to load fund share settings: ${response.status}`))
+  }
+
+  const payload = (await response.json()) as { data?: FundShareSettingsRecord }
+  if (!payload.data) {
+    throw new Error('Fund share settings response is empty')
+  }
+
+  return payload.data
+}
+
+export async function saveFundShareSettings(input: FundShareSettingsInput, options: { adminAddress?: string } = {}): Promise<FundShareSettingsRecord> {
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  }
+  if (options.adminAddress) {
+    headers['X-Sui-Admin-Address'] = options.adminAddress
+  }
+
+  const response = await fetch(toApiUrl('/api/fund/share-settings'), {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify(toFundShareSettingsPayload(input)),
+  })
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, `Failed to save fund share settings: ${response.status}`))
+  }
+
+  const payload = (await response.json()) as { data?: FundShareSettingsRecord }
+  if (!payload.data) {
+    throw new Error('Fund share settings response is empty')
+  }
+
+  return payload.data
 }

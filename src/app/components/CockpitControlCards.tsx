@@ -661,8 +661,13 @@ function includesNormalized(value: string | null | undefined, aliases: string[])
   return normalized !== '' && aliases.includes(normalized);
 }
 
+function investInterpolate(template: string, symbol: string): string {
+  return template.replace(/\{symbol\}/g, symbol);
+}
+
 export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: CockpitControlCardsProps) {
   const { messages } = useI18n();
+  const inv = messages.invest;
   const suiClient = useSuiClient();
   const wallets = useWallets();
   const currentAccount = useCurrentAccount();
@@ -673,11 +678,15 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
     walletLabel,
     walletName,
     investAmount,
+    depositToken,
+    depositTokenOptions,
+    formatDepositTokenBalance,
     redeemAmount,
     investBalanceLabel,
     redeemBalanceLabel,
     balancesLoading,
     setInvestAmount,
+    setDepositTokenSymbol,
     setRedeemAmount,
     actionState,
     executeInvest,
@@ -723,6 +732,7 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
   const [sendError, setSendError] = React.useState<string | null>(null);
   const [sendSuccess, setSendSuccess] = React.useState<string | null>(null);
   const [sendBusy, setSendBusy] = React.useState(false);
+  const [investRouteNotice, setInvestRouteNotice] = React.useState<string | null>(null);
   const pendingSendAfterZkLoginRef = React.useRef(false);
   const handleSendAssetsRef = React.useRef<(() => Promise<void>) | null>(null);
   const [addressCopied, setAddressCopied] = React.useState(false);
@@ -761,13 +771,14 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
     externalSession?.type === 'google' && externalSession.provider === 'zklogin',
   );
   const isSolanaNetworkActive = selectedNetwork === 'solana';
-  const filterLinkedWalletsForPortfolio = isSuiNetworkActive && (
-    Boolean(identitySession?.token) || isZkLoginGoogleSession
-  );
-  const filterLinkedWalletsForSolana = isSolanaNetworkActive && Boolean(identitySession?.token);
-  const filterLinkedWalletsForEvm =
-    networkFamily === 'evm' && Boolean(identitySession?.token);
-  const displayedLinkedWallets = React.useMemo(() => {
+  /** On Sui tab, show only Sui-linked rows (same idea as EVM/Solana: not the whole multi-chain profile list). */
+  const filterLinkedWalletsForPortfolio = isSuiNetworkActive;
+  /** Filter saved wallets to the header chain whenever that family is selected (not only when signed in with Google). */
+  const filterLinkedWalletsForSolana = isSolanaNetworkActive;
+  const filterLinkedWalletsForEvm = networkFamily === 'evm';
+  const currentSuiAddress = normalizeWalletAddress(currentAccount?.address);
+  const connectedWalletAddress = currentSuiAddress || normalizeWalletAddress(getExternalSessionAddress(externalSession));
+  const displayedLinkedWalletsBase = React.useMemo(() => {
     if (filterLinkedWalletsForPortfolio) {
       return linkedWallets.filter(resolvedWalletIsSuiNetwork);
     }
@@ -779,12 +790,43 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
     }
     return linkedWallets;
   }, [filterLinkedWalletsForEvm, filterLinkedWalletsForPortfolio, filterLinkedWalletsForSolana, linkedWallets, selectedNetwork]);
+  /** After connecting Sui in the header, show only that address in the cockpit switcher (not every wallet saved on the Google profile). */
+  const restrictPortfolioSwitcherToHeaderWallet =
+    filterLinkedWalletsForPortfolio
+    && hasDirectWalletConnection
+    && Boolean(connectedWalletAddress)
+    && isValidSuiAddress(connectedWalletAddress);
+  const restrictSolanaSwitcherToHeaderWallet =
+    filterLinkedWalletsForSolana
+    && hasDirectWalletConnection
+    && externalSession?.type === 'solana'
+    && Boolean(connectedWalletAddress);
+  const restrictEvmSwitcherToHeaderWallet =
+    filterLinkedWalletsForEvm
+    && hasDirectWalletConnection
+    && externalSession?.type === 'evm'
+    && Boolean(connectedWalletAddress);
+  const displayedLinkedWallets = React.useMemo(() => {
+    let pool = displayedLinkedWalletsBase;
+    if (restrictPortfolioSwitcherToHeaderWallet) {
+      const norm = normalizeWalletAddress(connectedWalletAddress);
+      pool = pool.filter((w) => normalizeWalletAddress(w.address) === norm);
+    } else if (restrictSolanaSwitcherToHeaderWallet || restrictEvmSwitcherToHeaderWallet) {
+      const norm = normalizeWalletAddress(connectedWalletAddress);
+      pool = pool.filter((w) => normalizeWalletAddress(w.address) === norm);
+    }
+    return pool;
+  }, [
+    connectedWalletAddress,
+    displayedLinkedWalletsBase,
+    restrictEvmSwitcherToHeaderWallet,
+    restrictPortfolioSwitcherToHeaderWallet,
+    restrictSolanaSwitcherToHeaderWallet,
+  ]);
   const walletPoolForActive =
     filterLinkedWalletsForPortfolio || filterLinkedWalletsForSolana || filterLinkedWalletsForEvm
       ? displayedLinkedWallets
       : linkedWallets;
-  const currentSuiAddress = normalizeWalletAddress(currentAccount?.address);
-  const connectedWalletAddress = currentSuiAddress || normalizeWalletAddress(getExternalSessionAddress(externalSession));
 
   const connectedSuiNotInDatabase = React.useMemo(() => {
     if (!identitySession?.token || !isSuiNetworkActive) {
@@ -936,6 +978,10 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
 
   const activeWalletAddress = React.useMemo(() => {
     if (filterLinkedWalletsForPortfolio) {
+      const headerConnectedNorm =
+        hasDirectWalletConnection && connectedWalletAddress && isValidSuiAddress(connectedWalletAddress)
+          ? normalizeWalletAddress(connectedWalletAddress)
+          : '';
       const normalizedSelected = normalizeWalletAddress(selectedWalletAddress);
       const inList = Boolean(
         normalizedSelected
@@ -943,6 +989,9 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
       );
       if (inList) {
         return normalizedSelected;
+      }
+      if (headerConnectedNorm) {
+        return headerConnectedNorm;
       }
 
       return normalizeWalletAddress(displayedLinkedWallets[0]?.address || '');
@@ -953,6 +1002,7 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
     connectedWalletAddress,
     displayedLinkedWallets,
     filterLinkedWalletsForPortfolio,
+    hasDirectWalletConnection,
     selectedWalletAddress,
   ]);
   const activeWallet = React.useMemo(
@@ -2328,6 +2378,50 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
     setIsSendOpen(true);
   }, []);
 
+  const handleInvestDeposit = React.useCallback(async () => {
+    setInvestRouteNotice(null);
+
+    if (!activeWalletAddress || !activeWalletIsSui) {
+      persistHeaderNetwork('sui');
+      setIsWalletModalOpen(true);
+      setInvestRouteNotice('Подключите Sui кошелек или выберите Sui zkLogin-адрес, чтобы подписать депозит.');
+      return;
+    }
+
+    if (!suiSendSigningRoute.useExtension && !suiSendSigningRoute.useZkLogin) {
+      const w3a = activeWalletForBroadcast?.web3auth;
+      if (w3a === 0) {
+        persistHeaderNetwork('sui');
+        setIsWalletModalOpen(true);
+        setInvestRouteNotice('Баланс виден, но кошелек не подключен как подписант. Подключите этот Sui wallet для депозита.');
+        return;
+      }
+
+      if (w3a === 1 || isZkLoginGoogleSession || Boolean(identitySession?.token)) {
+        setIsZkLoginAssistDialogOpen(true);
+        setGoogleSuiButtonVersion((version) => version + 1);
+        setInvestRouteNotice('Баланс виден, но zkLogin-сессия для подписи не активна. Войдите через Google zkLogin.');
+        return;
+      }
+
+      persistHeaderNetwork('sui');
+      setIsWalletModalOpen(true);
+      setInvestRouteNotice('Для депозита нужна подпись. Подключите Sui wallet или войдите через Google zkLogin.');
+      return;
+    }
+
+    await executeInvest();
+  }, [
+    activeWalletAddress,
+    activeWalletForBroadcast?.web3auth,
+    activeWalletIsSui,
+    executeInvest,
+    identitySession?.token,
+    isZkLoginGoogleSession,
+    suiSendSigningRoute.useExtension,
+    suiSendSigningRoute.useZkLogin,
+  ]);
+
   const handleSendAssets = React.useCallback(async () => {
     setSendError(null);
     setSendSuccess(null);
@@ -2978,35 +3072,55 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
             <div className="space-y-3">
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="relative overflow-hidden rounded-[1.4rem] border border-sky-400/25 bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.22),_transparent_55%),rgba(8,47,73,0.75)] p-4 shadow-[0_0_35px_rgba(56,189,248,0.12)]">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-200/80">Available USDC</div>
-                  <div className="mt-2 text-xl font-semibold text-white">
-                    {balancesLoading ? 'Loading...' : investBalanceLabel}
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-200/80">
+                    {investInterpolate(inv.depositAvailableTokenCard, depositToken.symbol)}
                   </div>
-                  <div className="mt-1 text-xs text-sky-100/70">Detected in active Sui wallet or zkLogin session</div>
+                  <div className="mt-2 text-xl font-semibold text-white">
+                    {balancesLoading ? inv.depositLoading : investBalanceLabel}
+                  </div>
+                  <div className="mt-1 text-xs text-sky-100/70">{inv.depositWalletDetectionHint}</div>
                 </div>
                 <div className="relative overflow-hidden rounded-[1.4rem] border border-emerald-400/25 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.2),_transparent_55%),rgba(6,46,30,0.76)] p-4 shadow-[0_0_35px_rgba(16,185,129,0.12)]">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-200/80">Available AV8 Share</div>
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-200/80">{inv.depositAv8ShareCard}</div>
                   <div className="mt-2 text-xl font-semibold text-white">
-                    {balancesLoading ? 'Loading...' : redeemBalanceLabel}
+                    {balancesLoading ? inv.depositLoading : redeemBalanceLabel}
                   </div>
-                  <div className="mt-1 text-xs text-emerald-100/70">Ready for portfolio::withdraw when share coins exist</div>
+                  <div className="mt-1 text-xs text-emerald-100/70">{inv.depositAv8WithdrawHint}</div>
                 </div>
               </div>
               <div className="grid gap-3">
                 <label className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-                  Invest USDC
+                  {inv.depositAssetFromWalletLabel}
+                  <select
+                    value={depositToken.coinType}
+                    onChange={(event) => setDepositTokenSymbol(event.target.value)}
+                    className="mt-2 w-full rounded-2xl border border-white/[0.1] bg-[rgba(5,9,18,0.82)] px-4 py-3 text-base font-medium text-white outline-none shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-sm transition-[border-color,box-shadow] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] focus:border-teal-400/40"
+                  >
+                    {depositTokenOptions.map((token) => (
+                      <option key={token.coinType} value={token.coinType}>
+                        {token.symbol} - {formatDepositTokenBalance(token)} -{' '}
+                        {token.whitelisted ? inv.depositTokenWhitelisted : inv.depositTokenNotWhitelisted}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="mt-2 text-xs font-semibold normal-case tracking-normal text-slate-500">
+                    {inv.depositAvailableInWalletPrefix} {formatDepositTokenBalance(depositToken)}
+                  </div>
+                </label>
+                <label className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                  {inv.depositAmountFieldLabel}
                   <input
                     type="number"
                     min="0"
-                    step="0.000001"
+                    step="any"
                     value={investAmount}
                     onChange={(event) => setInvestAmount(event.target.value)}
                     className="mt-2 w-full rounded-2xl border border-white/[0.1] bg-[rgba(5,9,18,0.82)] px-4 py-3 text-base font-medium text-white outline-none shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-sm transition-[border-color,box-shadow] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] focus:border-teal-400/40"
-                    placeholder="1.000000"
+                    placeholder={`1 ${depositToken.symbol}`}
                   />
                 </label>
                 <label className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-                  Redeem AV8 share
+                  {inv.redeemAv8ShareLabel}
                   <input
                     type="number"
                     min="0"
@@ -3020,8 +3134,8 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
               </div>
               <button
                 type="button"
-                onClick={() => void executeInvest()}
-                disabled={actionState.busy}
+                onClick={() => void handleInvestDeposit()}
+                disabled={actionState.busy || !depositToken.executable}
                 className="flex w-full items-center justify-center rounded-2xl bg-gradient-to-r from-sky-400 to-cyan-300 px-4 py-3 font-semibold text-slate-950 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {actionState.busy ? messages.portfolio.cockpitSubmittingPtb : messages.portfolio.cockpitDeployCapital}
@@ -3033,13 +3147,25 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
               >
                 {messages.portfolio.cockpitRecallLiquidity}
               </button>
+              {investRouteNotice ? (
+                <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">
+                  {investRouteNotice}
+                </div>
+              ) : null}
             </div>
 
             <div className="mt-5 rounded-2xl border border-white/[0.1] bg-[rgba(5,9,18,0.72)] p-4 text-sm leading-6 text-slate-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-sm">
-              PTB route:
+              {inv.depositPtbRouteLabel}
               <div className="mt-2 font-medium text-slate-200">
-                <code>deposit(registry, basket, Coin&lt;USDC&gt;) / withdraw(basket, Coin&lt;SHARE&gt;)</code>
+                <code>deposit(registry, basket, position, Coin&lt;SUI&gt;) / withdraw(basket, Coin&lt;AV8&gt;)</code>
               </div>
+              {!depositToken.executable ? (
+                <div className="mt-3 text-amber-100">
+                  {depositToken.whitelisted
+                    ? investInterpolate(inv.depositRouteBlockedWhitelisted, depositToken.symbol)
+                    : investInterpolate(inv.depositRouteBlockedNotWhitelisted, depositToken.symbol)}
+                </div>
+              ) : null}
             </div>
 
             {actionState.error ? (

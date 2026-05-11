@@ -19,6 +19,7 @@ const PrivacyPolicyPage = React.lazy(() => import('./components/PrivacyPolicyPag
 const KycAmlPage = React.lazy(() => import('./components/KycAmlPage').then((module) => ({ default: module.KycAmlPage })));
 const TermsOfServicePage = React.lazy(() => import('./components/TermsOfServicePage').then((module) => ({ default: module.TermsOfServicePage })));
 const AboutPage = React.lazy(() => import('./components/AboutPage').then((module) => ({ default: module.AboutPage })));
+const TokenAdminPage = React.lazy(() => import('./components/TokenAdminPage').then((module) => ({ default: module.TokenAdminPage })));
 
 type AppRoute =
   | { page: 'home' }
@@ -32,7 +33,8 @@ type AppRoute =
   | { page: 'whitepaper' }
   | { page: 'privacy-policy' }
   | { page: 'terms-of-service' }
-  | { page: 'kyc-aml' };
+  | { page: 'kyc-aml' }
+  | { page: 'token-admin' };
 
 function resolveRoute(): AppRoute {
   if (typeof window === 'undefined') {
@@ -84,6 +86,10 @@ function resolveRoute(): AppRoute {
 
   if (normalizedPathname.endsWith('/kyc-aml')) {
     return { page: 'kyc-aml' };
+  }
+
+  if (/(?:\/admin\/tokens|\/tokens)$/.test(normalizedPathname)) {
+    return { page: 'token-admin' };
   }
 
   return { page: 'home' };
@@ -206,6 +212,8 @@ export default function App() {
                     ? messages.termsOfService.pageTitle
                   : route.page === 'kyc-aml'
                     ? messages.kycAml.pageTitle
+                  : route.page === 'token-admin'
+                    ? 'Token administration'
           : messages.article.pageTitle;
     document.title = `${project.name} | ${sectionTitle}`;
   }, [messages.article.pageTitle, messages.blog.pageTitle, messages.invest.pageTitle, messages.kycAml.pageTitle, messages.meta.titleSuffix, messages.mint.pageTitle, messages.navbar.aboutProject, messages.portfolio.pageTitle, messages.privacyPolicy.pageTitle, messages.swap.pageTitle, messages.termsOfService.pageTitle, messages.whitepaper.pageTitle, project.name, route.page]);
@@ -296,6 +304,8 @@ export default function App() {
             <TermsOfServicePage />
           ) : route.page === 'kyc-aml' ? (
             <KycAmlPage />
+          ) : route.page === 'token-admin' ? (
+            <TokenAdminPage />
           ) : (
             <ArticlePage project={localizedProject} articleId={route.articleId} />
           )}

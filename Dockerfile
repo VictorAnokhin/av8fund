@@ -1,11 +1,7 @@
 # Debian-based Node (glibc). Optional Rollup binaries are enforced via npm postinstall
 # (scripts/ensure-rollup-native.cjs) so bind-mounted + volume node_modules still get the right @rollup/* package.
-FROM node:20-bookworm-slim
-
-# Native addons (e.g. bufferutil via ws) need node-gyp: Python + compiler toolchain.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 make g++ \
-  && rm -rf /var/lib/apt/lists/*
+# The full bookworm image includes python3/make/g++ for node-gyp without requiring apt-get during local builds.
+FROM node:24-bookworm
 
 WORKDIR /app
 

@@ -1,12 +1,15 @@
 import React from 'react';
-import { ArrowRightLeft, CreditCard, Search } from 'lucide-react';
+import { ArrowRightLeft, CreditCard, LoaderCircle, Search, Wallet } from 'lucide-react';
 
 import {
+  createWalletLinkChallenge,
   getWalletPortfolioTokens,
   getWalletSwapPrice,
   getWalletSwapQuote,
   getWeb3SwapTokens,
+  linkAuthenticatedWallet,
   type WalletPortfolioToken,
+  walletLinkTypeFromPortfolioNetwork,
   type Web3SwapToken,
 } from '../lib/api';
 import {
@@ -14,8 +17,10 @@ import {
   getExternalSessionAddress,
   isExternalSessionEvm,
   readExternalWalletSession,
+  persistExternalWalletSession,
   type ExternalWalletSession,
 } from '../lib/externalWalletSession';
+import { persistIdentitySession, readIdentitySession } from '../lib/identitySession';
 import { normalizeSwapWalletAddress } from '../lib/swapLinkedWallets';
 import { useSwapLinkedWallets } from '../hooks/useSwapLinkedWallets';
 import { useI18n } from '../i18n';
@@ -41,16 +46,47 @@ type SwapSellToken = Web3SwapToken & {
 
 type SwapRail = 'evm' | 'sui';
 
+const NATIVE_TOKEN_ADDRESS = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+
 const PORTFOLIO_CHAIN_TO_HEX: Record<string, string> = {
   ethereum: '0x1',
   eth: '0x1',
+  mainnet: '0x1',
   'binance-smart-chain': '0x38',
+  'bnb-smart-chain': '0x38',
+  'bnb chain': '0x38',
   bsc: '0x38',
+  bnb: '0x38',
   polygon: '0x89',
+  'polygon-pos': '0x89',
+  matic: '0x89',
   optimism: '0xa',
+  opt: '0xa',
   base: '0x2105',
   arbitrum: '0xa4b1',
+  'arbitrum-one': '0xa4b1',
+  'arbitrum one': '0xa4b1',
+  arb: '0xa4b1',
   avalanche: '0xa86a',
+  avax: '0xa86a',
+};
+
+const CHAIN_NATIVE_TOKEN: Record<string, { symbol: string; name: string; decimals: number }> = {
+  '0x1': { symbol: 'ETH', name: 'Ethereum', decimals: 18 },
+  '0xa4b1': { symbol: 'ETH', name: 'Ethereum', decimals: 18 },
+  '0xa': { symbol: 'ETH', name: 'Ethereum', decimals: 18 },
+  '0x2105': { symbol: 'ETH', name: 'Ethereum', decimals: 18 },
+  '0x38': { symbol: 'BNB', name: 'BNB', decimals: 18 },
+  '0x89': { symbol: 'POL', name: 'Polygon', decimals: 18 },
+  '0xa86a': { symbol: 'AVAX', name: 'Avalanche', decimals: 18 },
+};
+
+const CHAIN_ID_TO_WALLET_TYPE: Record<string, string> = {
+  '0x1': 'eth',
+  '0xa4b1': 'arbitrum',
+  '0x2105': 'base',
+  '0x89': 'polygon',
+  '0x38': 'bnb',
 };
 
 function getEthereumProvider(kind: 'metamask' | 'rabby'): Eip1193Provider | null {
@@ -129,8 +165,36 @@ function normalizeTokenAddress(value?: string | null): string {
   return String(value || '').trim().toLowerCase();
 }
 
+function normalizeSwapTokenAddress(value?: string | null): string {
+  const normalized = normalizeTokenAddress(value);
+  return normalized === '' || normalized === 'native' ? NATIVE_TOKEN_ADDRESS : normalized;
+}
+
+function normalizeChainReference(value?: string | null): string | null {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) {
+    return null;
+  }
+
+  const eip155Match = raw.match(/^eip155:(\d+)$/);
+  if (eip155Match) {
+    return normalizeHexChainId(eip155Match[1]);
+  }
+
+  return normalizeHexChainId(raw) ?? PORTFOLIO_CHAIN_TO_HEX[raw] ?? null;
+}
+
 function walletTokenChainId(token: WalletPortfolioToken): string | null {
-  return PORTFOLIO_CHAIN_TO_HEX[String(token.chain || '').trim().toLowerCase()] ?? null;
+  return normalizeChainReference((token as WalletPortfolioToken & { chain_id?: string | null }).chain_id)
+    ?? normalizeChainReference(token.chain);
+}
+
+function walletTypeForEvmLink(network?: string | null, chainId?: string | null) {
+  const normalizedChainId = normalizeChainReference(chainId ?? network);
+  return walletLinkTypeFromPortfolioNetwork(
+    (normalizedChainId ? CHAIN_ID_TO_WALLET_TYPE[normalizedChainId] : null)
+      ?? String(network || ''),
+  );
 }
 
 function decimalToUnits(amount: string, decimals: number): string {
@@ -216,6 +280,8 @@ export function SwapWidgetSection({
   const [routeHint, setRouteHint] = React.useState<string | null>(null);
   const [isPricing, setIsPricing] = React.useState(false);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
+  const [connectPending, setConnectPending] = React.useState<'metamask' | 'rabby' | null>(null);
+  const [connectError, setConnectError] = React.useState<string | null>(null);
   const [lastTxHash, setLastTxHash] = React.useState<string | null>(null);
   const [swapRail, setSwapRail] = React.useState<SwapRail>('evm');
 
@@ -223,10 +289,21 @@ export function SwapWidgetSection({
   const isEvmWallet = isExternalSessionEvm(walletSession);
   const sessionWalletAddress = getExternalSessionAddress(walletSession) ?? '';
   const evmSwapAddress = swapLinked.selectedEvmAddress.trim() || sessionWalletAddress;
+  const selectedEvmWallet = React.useMemo(
+    () => swapLinked.evmLinked.find((wallet) => (
+      normalizeSwapWalletAddress(wallet.address) === normalizeSwapWalletAddress(evmSwapAddress)
+    )) ?? null,
+    [evmSwapAddress, swapLinked.evmLinked],
+  );
+  const selectedEvmChainId = React.useMemo(
+    () => normalizeChainReference(selectedEvmWallet?.chain_id ?? selectedEvmWallet?.network),
+    [selectedEvmWallet],
+  );
+  const selectedEvmNeedsExtensionConnect = Boolean(selectedEvmWallet && Number(selectedEvmWallet.web3auth ?? 0) === 0);
   const evmSessionMatchesSelection =
     Boolean(isEvmWallet && sessionWalletAddress)
     && normalizeSwapWalletAddress(evmSwapAddress) === normalizeSwapWalletAddress(sessionWalletAddress);
-  const activeChainId = walletChainId ?? normalizeHexChainId(tokens[0]?.chain_id) ?? null;
+  const activeChainId = selectedEvmChainId ?? walletChainId ?? normalizeHexChainId(tokens[0]?.chain_id) ?? null;
   const chainTokens = React.useMemo(
     () => tokens.filter((token) => normalizeHexChainId(token.chain_id) === activeChainId),
     [activeChainId, tokens],
@@ -238,17 +315,18 @@ export function SwapWidgetSection({
 
     return walletTokens
       .filter((asset) => walletTokenChainId(asset) === activeChainId)
-      .filter((asset) => normalizeTokenAddress(asset.token_address) !== '' && Number(asset.balance || 0) > 0)
+      .filter((asset) => Number(asset.balance || 0) > 0)
       .map((asset) => {
-        const address = normalizeTokenAddress(asset.token_address);
+        const address = normalizeSwapTokenAddress(asset.token_address);
         const configured = chainTokens.find((token) => normalizeTokenAddress(token.address) === address);
+        const native = address === NATIVE_TOKEN_ADDRESS ? CHAIN_NATIVE_TOKEN[activeChainId] : undefined;
 
         return {
           id: configured?.id ?? 0,
-          symbol: asset.symbol || configured?.symbol || 'TOKEN',
-          name: asset.name || configured?.name || asset.symbol || 'Token',
+          symbol: asset.symbol || configured?.symbol || native?.symbol || 'TOKEN',
+          name: asset.name || configured?.name || native?.name || asset.symbol || 'Token',
           address,
-          decimals: Number(asset.decimals || configured?.decimals || 18),
+          decimals: Number(asset.decimals || configured?.decimals || native?.decimals || 18),
           chain_id: activeChainId,
           chain_id_decimal: configured?.chain_id_decimal || String(Number.parseInt(activeChainId.replace(/^0x/, ''), 16)),
           coingecko_id: configured?.coingecko_id || '',
@@ -370,7 +448,7 @@ export function SwapWidgetSection({
     let cancelled = false;
     setIsLoadingWalletTokens(true);
 
-    getWalletPortfolioTokens(evmSwapAddress, { refresh: false })
+    getWalletPortfolioTokens(evmSwapAddress, { refresh: false, includeUnselected: true })
       .then((portfolio) => {
         if (cancelled) {
           return;
@@ -480,6 +558,77 @@ export function SwapWidgetSection({
     setToTokenAddress(fromToken.address);
   }
 
+  async function handleConnectLinkedEvmWallet(providerName: 'metamask' | 'rabby') {
+    const provider = getEthereumProvider(providerName);
+    if (!provider) {
+      setConnectError(`${providerName === 'metamask' ? 'MetaMask' : 'Rabby Wallet'} was not detected in this browser.`);
+      return;
+    }
+
+    setConnectPending(providerName);
+    setConnectError(null);
+
+    try {
+      const accounts = await provider.request({ method: 'eth_requestAccounts' });
+      const address = Array.isArray(accounts) && typeof accounts[0] === 'string' ? accounts[0] : '';
+      if (!address) {
+        throw new Error('Wallet did not return an account.');
+      }
+
+      const normalizedConnected = normalizeSwapWalletAddress(address);
+      const normalizedSelected = normalizeSwapWalletAddress(evmSwapAddress);
+      if (normalizedSelected && normalizedConnected !== normalizedSelected) {
+        throw new Error('Connected wallet does not match the selected linked EVM address.');
+      }
+
+      const chainId = normalizeHexChainId(await provider.request({ method: 'eth_chainId' }) as string) ?? undefined;
+      const identitySession = readIdentitySession();
+
+      if (identitySession?.token) {
+        const walletType = walletTypeForEvmLink(selectedEvmWallet?.network, selectedEvmChainId ?? chainId);
+        const challenge = await createWalletLinkChallenge(identitySession.token, {
+          address,
+          walletType,
+        });
+        const signature = await provider.request({
+          method: 'personal_sign',
+          params: [challenge.message, address],
+        });
+
+        if (typeof signature !== 'string' || signature.trim() === '') {
+          throw new Error('Wallet did not return a signature.');
+        }
+
+        const user = await linkAuthenticatedWallet(identitySession.token, {
+          address,
+          signature,
+          network: selectedEvmWallet?.network ?? walletType,
+          walletType,
+        });
+
+        persistIdentitySession({
+          ...identitySession,
+          user,
+        });
+      }
+
+      const session: ExternalWalletSession = {
+        type: 'evm',
+        provider: providerName,
+        address,
+        chainId,
+      };
+
+      persistExternalWalletSession(session);
+      setWalletSession(session);
+      setWalletChainId(chainId ?? null);
+    } catch (error) {
+      setConnectError(error instanceof Error ? error.message : 'Wallet connection failed.');
+    } finally {
+      setConnectPending(null);
+    }
+  }
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!walletSession || !isEvmWallet || !fromToken || !toToken || !evmSwapAddress || !evmSessionMatchesSelection) {
@@ -562,7 +711,7 @@ export function SwapWidgetSection({
         setQuoteMessage('Swap transaction submitted through 1inch. Waiting for confirmation...');
         await waitForTransactionReceipt(provider, swapHash);
         setQuoteMessage('Swap confirmed. Refreshing wallet balances...');
-        const portfolio = await getWalletPortfolioTokens(evmSwapAddress, { refresh: true });
+        const portfolio = await getWalletPortfolioTokens(evmSwapAddress, { refresh: true, includeUnselected: true });
         setWalletTokens(portfolio.result);
         setQuoteMessage('Swap confirmed.');
       }
@@ -650,6 +799,29 @@ export function SwapWidgetSection({
               <p className="mt-2 text-xs text-amber-200/90">
                 Connect an EVM wallet that matches the selected address to sign the swap.
               </p>
+            ) : null}
+            {selectedEvmNeedsExtensionConnect && !evmSessionMatchesSelection ? (
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {(['metamask', 'rabby'] as const).map((providerName) => (
+                  <button
+                    key={providerName}
+                    type="button"
+                    onClick={() => void handleConnectLinkedEvmWallet(providerName)}
+                    disabled={connectPending !== null}
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-teal-400/20 bg-teal-400/[0.08] px-3 text-xs font-semibold text-teal-100 transition-colors hover:border-teal-300/35 hover:bg-teal-400/[0.12] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {connectPending === providerName ? (
+                      <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Wallet className="h-3.5 w-3.5" />
+                    )}
+                    {providerName === 'metamask' ? 'MetaMask' : 'Rabby'}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {connectError ? (
+              <p className="mt-2 text-xs text-amber-200/90">{connectError}</p>
             ) : null}
           </div>
         ) : null}
