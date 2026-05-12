@@ -20,6 +20,7 @@ import {
   type FundTokenRecord,
   type RwaAdminCapRecord,
 } from '../lib/api';
+import { useSwapLinkedWallets } from '../hooks/useSwapLinkedWallets';
 import { useI18n } from '../i18n';
 import { PageBreadcrumbsBar, PageHeroBadge, PageHeroShell } from './PageChrome';
 
@@ -96,7 +97,9 @@ function shortObjectId(value: string, notSet: string): string {
 }
 
 function normalizeAddress(value?: string | null): string {
-  return String(value || '').trim().toLowerCase();
+  const trimmed = String(value || '').trim().toLowerCase();
+  const match = trimmed.match(/^0x([a-f0-9]{1,64})$/);
+  return match ? `0x${match[1].padStart(64, '0')}` : trimmed;
 }
 
 function extractObjectOwnerAddress(data: unknown): string {
@@ -217,8 +220,10 @@ export function TokenAdminPage() {
   const homeHref = getBasePath();
   const account = useCurrentAccount();
   const suiClient = useSuiClient();
+  const { selectedSuiAddress } = useSwapLinkedWallets();
   const { mutateAsync: signAndExecuteTransaction } = useSignAndExecuteTransaction();
-  const adminAddress = account?.address || '';
+  const connectedAdminAddress = normalizeAddress(account?.address || '');
+  const adminAddress = connectedAdminAddress || normalizeAddress(selectedSuiAddress);
   const attemptedAutoRegisterKey = React.useRef('');
 
   const [tokens, setTokens] = React.useState<FundTokenRecord[]>([]);
@@ -246,6 +251,7 @@ export function TokenAdminPage() {
     [adminAddress, adminCaps],
   );
   const hasAdminAccess = Boolean(adminAddress && adminCapForWallet);
+  const hasConnectedAdminSigner = Boolean(connectedAdminAddress && normalizeAddress(connectedAdminAddress) === normalizeAddress(adminAddress));
 
   const totalTargetBps = React.useMemo(
     () => tokens.filter((token) => token.enabled).reduce((sum, token) => sum + Number(token.target_weight_bps || 0), 0),
@@ -381,12 +387,18 @@ export function TokenAdminPage() {
   }
 
   function assertFundOwnerCapReady() {
+    if (!hasConnectedAdminSigner) {
+      throw new Error(t.errors.connectWallet);
+    }
     if (!SUI_FUND_CONFIG.packageId || !SUI_FUND_CONFIG.registryId || !SUI_FUND_CONFIG.adminCapId) {
       throw new Error(t.errors.fundOwnerCap);
     }
   }
 
   function assertShareSettingsReady() {
+    if (!hasConnectedAdminSigner) {
+      throw new Error(t.errors.connectWallet);
+    }
     if (!shareSettings.packageId || !shareSettings.shareConfigId || !shareSettings.shareAdminCapId) {
       throw new Error(t.errors.shareSettings);
     }
@@ -558,6 +570,9 @@ export function TokenAdminPage() {
 
     try {
       assertAdminReady();
+      if (!hasConnectedAdminSigner) {
+        throw new Error(t.errors.connectWallet);
+      }
       if (!SUI_FUND_CONFIG.packageId || !SUI_FUND_CONFIG.managerCapId || !SUI_FUND_CONFIG.basketId || !SUI_FUND_CONFIG.strategyId) {
         throw new Error(t.errors.basketConfig);
       }
