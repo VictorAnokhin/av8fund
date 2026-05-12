@@ -23,6 +23,7 @@ const KycAmlPage = React.lazy(() => import('./components/KycAmlPage').then((modu
 const TermsOfServicePage = React.lazy(() => import('./components/TermsOfServicePage').then((module) => ({ default: module.TermsOfServicePage })));
 const AboutPage = React.lazy(() => import('./components/AboutPage').then((module) => ({ default: module.AboutPage })));
 const TokenAdminPage = React.lazy(() => import('./components/TokenAdminPage').then((module) => ({ default: module.TokenAdminPage })));
+const PoolAdminPage = React.lazy(() => import('./components/PoolAdminPage').then((module) => ({ default: module.PoolAdminPage })));
 
 type AppRoute =
   | { page: 'home' }
@@ -30,7 +31,7 @@ type AppRoute =
   | { page: 'article'; articleId: number }
   | { page: 'swap' }
   | { page: 'mint' }
-  | { page: 'invest' }
+  | { page: 'invest'; poolObjectId?: string }
   | { page: 'portfolio' }
   | { page: 'fund-accounts' }
   | { page: 'fund-basket' }
@@ -39,7 +40,8 @@ type AppRoute =
   | { page: 'privacy-policy' }
   | { page: 'terms-of-service' }
   | { page: 'kyc-aml' }
-  | { page: 'token-admin' };
+  | { page: 'token-admin' }
+  | { page: 'pool-admin' };
 
 function resolveRoute(): AppRoute {
   if (typeof window === 'undefined') {
@@ -63,6 +65,11 @@ function resolveRoute(): AppRoute {
 
   if (normalizedPathname.endsWith('/mint')) {
     return { page: 'mint' };
+  }
+
+  const investPoolMatch = normalizedPathname.match(/\/invest\/([^/]+)$/);
+  if (investPoolMatch) {
+    return { page: 'invest', poolObjectId: decodeURIComponent(investPoolMatch[1]) };
   }
 
   if (normalizedPathname.endsWith('/invest')) {
@@ -103,6 +110,10 @@ function resolveRoute(): AppRoute {
 
   if (/(?:\/admin\/tokens|\/tokens)$/.test(normalizedPathname)) {
     return { page: 'token-admin' };
+  }
+
+  if (/(?:\/admin\/pools|\/pools)$/.test(normalizedPathname)) {
+    return { page: 'pool-admin' };
   }
 
   return { page: 'home' };
@@ -231,6 +242,8 @@ export default function App() {
                     ? messages.kycAml.pageTitle
                   : route.page === 'token-admin'
                     ? 'Token administration'
+                    : route.page === 'pool-admin'
+                      ? 'Pool administration'
           : messages.article.pageTitle;
     document.title = `${project.name} | ${sectionTitle}`;
   }, [messages.article.pageTitle, messages.blog.pageTitle, messages.invest.pageTitle, messages.kycAml.pageTitle, messages.meta.titleSuffix, messages.mint.pageTitle, messages.navbar.aboutProject, messages.portfolio.pageTitle, messages.privacyPolicy.pageTitle, messages.swap.pageTitle, messages.termsOfService.pageTitle, messages.whitepaper.pageTitle, project.name, route.page]);
@@ -302,7 +315,7 @@ export default function App() {
           ) : route.page === 'mint' ? (
             <MintPage />
           ) : route.page === 'invest' ? (
-            <InvestPage />
+            <InvestPage poolObjectId={route.poolObjectId} />
           ) : route.page === 'portfolio' ? (
             <SectionBoundary
               title={messages.portfolio.pageTitle}
@@ -327,6 +340,8 @@ export default function App() {
             <KycAmlPage />
           ) : route.page === 'token-admin' ? (
             <TokenAdminPage />
+          ) : route.page === 'pool-admin' ? (
+            <PoolAdminPage />
           ) : (
             <ArticlePage project={localizedProject} articleId={route.articleId} />
           )}

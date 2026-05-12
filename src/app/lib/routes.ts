@@ -2,7 +2,7 @@ export function getBasePath(pathname?: string): string {
   const rawPath = pathname ?? (typeof window !== 'undefined' ? window.location.pathname : '/')
   return (
     rawPath.replace(
-      /\/(?:articles(?:\/[^/]+)?|swap|mint|invest|portfolio|fund-accounts|fund-basket|about|whitepaper|privacy-policy|terms-of-service|kyc-aml|admin\/tokens|tokens)\/?$/,
+      /\/(?:articles(?:\/[^/]+)?|swap|mint|invest(?:\/[^/]+)?|portfolio|fund-accounts|fund-basket|about|whitepaper|privacy-policy|terms-of-service|kyc-aml|admin\/tokens|admin\/pools|tokens|pools)\/?$/,
       '',
     ) || '/'
   )
@@ -77,8 +77,19 @@ export function getTokenAdminPath(basePath?: string): string {
   return root === '/' ? '/admin/tokens' : `${root}/admin/tokens`
 }
 
+export function getPoolAdminPath(basePath?: string): string {
+  const root = getBasePath(basePath)
+  return root === '/' ? '/admin/pools' : `${root}/admin/pools`
+}
+
 /** Short URL for the token admin screen (`/tokens`). */
 export function getTokensPath(basePath?: string): string {
   const root = getBasePath(basePath)
   return root === '/' ? '/tokens' : `${root}/tokens`
+}
+
+/** Short URL for the pool admin screen (`/pools`). */
+export function getPoolsPath(basePath?: string): string {
+  const root = getBasePath(basePath)
+  return root === '/' ? '/pools' : `${root}/pools`
 }

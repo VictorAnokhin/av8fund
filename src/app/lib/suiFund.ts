@@ -14,6 +14,11 @@ import {
   SUI_SHARE_ADMIN_CAP_ID,
   SUI_SHARE_CONFIG_ID,
   SUI_SHARE_TREASURY_CAP_ID,
+  SUI_NAV_STATE_ID,
+  SUI_NAV_ADMIN_CAP_ID,
+  SUI_POOL_REGISTRY_ID,
+  SUI_POOL_ADMIN_CAP_ID,
+  SUI_USDC_TYPE,
   SUI_PYTH_OBJECT_ID,
   SUI_STRATEGY_ID,
   resolveSuiSwapRpcUrl,
@@ -120,6 +125,11 @@ export const SUI_FUND_CONFIG = {
   shareConfigId: SUI_SHARE_CONFIG_ID,
   shareAdminCapId: SUI_SHARE_ADMIN_CAP_ID,
   shareTreasuryCapId: SUI_SHARE_TREASURY_CAP_ID,
+  navStateId: SUI_NAV_STATE_ID,
+  navAdminCapId: SUI_NAV_ADMIN_CAP_ID,
+  poolRegistryId: SUI_POOL_REGISTRY_ID,
+  poolAdminCapId: SUI_POOL_ADMIN_CAP_ID,
+  usdcType: SUI_USDC_TYPE,
   googleClientId: SUI_GOOGLE_CLIENT_ID,
   pythObjectId: PYTH_OBJECT_ID, // New field
 };

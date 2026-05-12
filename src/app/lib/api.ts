@@ -1543,6 +1543,219 @@ export async function deleteFundToken(id: number, options: { adminAddress?: stri
   }
 }
 
+export type FundPoolRecord = {
+  id: number
+  network: string
+  package_id: string
+  pool_registry_id: string
+  pool_admin_cap_id: string
+  pool_object_id: string
+  coin_type: string
+  symbol: string
+  name: string
+  description: string
+  risk_level: number
+  target_apy_bps: number
+  realized_apy_bps: number
+  min_deposit_usdc: string
+  max_weight_bps: number
+  active: boolean
+  logo_url: string
+  notes: string
+  created_at: string | null
+  updated_at: string | null
+}
+
+export type FundPoolInput = {
+  network: string
+  packageId?: string
+  poolRegistryId?: string
+  poolAdminCapId?: string
+  poolObjectId: string
+  coinType: string
+  symbol: string
+  name: string
+  description?: string
+  riskLevel: number
+  targetApyBps: number
+  realizedApyBps: number
+  minDepositUsdc: string
+  maxWeightBps: number
+  active: boolean
+  logoUrl?: string
+  notes?: string
+}
+
+function toFundPoolPayload(input: FundPoolInput): Record<string, unknown> {
+  return {
+    network: input.network,
+    package_id: input.packageId || '',
+    pool_registry_id: input.poolRegistryId || '',
+    pool_admin_cap_id: input.poolAdminCapId || '',
+    pool_object_id: input.poolObjectId,
+    coin_type: input.coinType,
+    symbol: input.symbol || 'USDC',
+    name: input.name,
+    description: input.description || '',
+    risk_level: input.riskLevel,
+    target_apy_bps: input.targetApyBps,
+    realized_apy_bps: input.realizedApyBps,
+    min_deposit_usdc: input.minDepositUsdc || '0',
+    max_weight_bps: input.maxWeightBps,
+    active: input.active,
+    logo_url: input.logoUrl || '',
+    notes: input.notes || '',
+  }
+}
+
+export async function getFundPools(input: {
+  network?: string
+  packageId?: string
+  coinType?: string
+  includeInactive?: boolean
+} = {}): Promise<FundPoolRecord[]> {
+  const params = new URLSearchParams()
+  if (input.network) {
+    params.set('network', input.network)
+  }
+  if (input.packageId) {
+    params.set('package_id', input.packageId)
+  }
+  if (input.coinType) {
+    params.set('coin_type', input.coinType)
+  }
+  if (input.includeInactive !== undefined) {
+    params.set('include_inactive', input.includeInactive ? '1' : '0')
+  }
+
+  const response = await fetch(toApiUrl(`/api/fund/pools${params.toString() ? `?${params.toString()}` : ''}`), {
+    method: 'GET',
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/json',
+    },
+  })
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, `Failed to load fund pools: ${response.status}`))
+  }
+
+  const payload = (await response.json()) as { data?: FundPoolRecord[] }
+  return Array.isArray(payload.data) ? payload.data : []
+}
+
+export async function saveFundPool(input: FundPoolInput, id?: number, options: { adminAddress?: string } = {}): Promise<FundPoolRecord> {
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+  }
+  if (options.adminAddress) {
+    headers['X-Sui-Admin-Address'] = options.adminAddress
+  }
+
+  const response = await fetch(toApiUrl(id ? `/api/fund/pools/${encodeURIComponent(String(id))}` : '/api/fund/pools'), {
+    method: id ? 'PUT' : 'POST',
+    headers,
+    body: JSON.stringify(toFundPoolPayload(input)),
+  })
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, `Failed to save fund pool: ${response.status}`))
+  }
+
+  const payload = (await response.json()) as { data?: FundPoolRecord }
+  if (!payload.data) {
+    throw new Error('Fund pool response is empty')
+  }
+
+  return payload.data
+}
+
+export async function deleteFundPool(id: number, options: { adminAddress?: string } = {}): Promise<void> {
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+  }
+  if (options.adminAddress) {
+    headers['X-Sui-Admin-Address'] = options.adminAddress
+  }
+
+  const response = await fetch(toApiUrl(`/api/fund/pools/${encodeURIComponent(String(id))}`), {
+    method: 'DELETE',
+    headers,
+  })
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, `Failed to delete fund pool: ${response.status}`))
+  }
+}
+
+export type FundPoolEventRecord = {
+  id: number
+  network: string
+  package_id: string
+  event_type: 'deposit' | 'withdraw' | 'update' | string
+  move_event_type: string
+  tx_digest: string
+  event_seq: number
+  checkpoint: number | null
+  pool_object_id: string
+  owner_address: string
+  amount_usdc: string
+  pool_shares: string
+  burned_pool_shares: string
+  balance_usdc: string
+  active: boolean | null
+  target_apy_bps: number | null
+  realized_apy_bps: number | null
+  min_deposit_usdc: string | null
+  max_weight_bps: number | null
+  event_at: string | null
+}
+
+export type FundPoolChartPoint = {
+  label: string
+  event_at: string | null
+  event_type: string
+  tvl_usdc: string
+  target_apy_bps: number | null
+  realized_apy_bps: number | null
+}
+
+export async function getFundPoolEvents(idOrObjectId: number | string, input: { limit?: number } = {}): Promise<{
+  pool: FundPoolRecord | null
+  data: FundPoolEventRecord[]
+  chart: FundPoolChartPoint[]
+}> {
+  const params = new URLSearchParams()
+  if (input.limit !== undefined) {
+    params.set('limit', String(input.limit))
+  }
+
+  const response = await fetch(toApiUrl(`/api/fund/pools/${encodeURIComponent(String(idOrObjectId))}/events${params.toString() ? `?${params.toString()}` : ''}`), {
+    method: 'GET',
+    cache: 'no-store',
+    headers: {
+      Accept: 'application/json',
+    },
+  })
+
+  if (!response.ok) {
+    throw new Error(await parseApiError(response, `Failed to load fund pool events: ${response.status}`))
+  }
+
+  const payload = (await response.json()) as {
+    pool?: FundPoolRecord
+    data?: FundPoolEventRecord[]
+    chart?: FundPoolChartPoint[]
+  }
+
+  return {
+    pool: payload.pool || null,
+    data: Array.isArray(payload.data) ? payload.data : [],
+    chart: Array.isArray(payload.chart) ? payload.chart : [],
+  }
+}
+
 export type FundShareSettingsRecord = {
   id: number | null
   network: string
