@@ -7,12 +7,14 @@ import { SUI_NETWORK } from '../config';
 import { getBasePath } from '../lib/routes';
 import { SUI_FUND_CONFIG } from '../lib/suiFund';
 import { getFundTokens, type FundTokenRecord } from '../lib/api';
+import { calculateOracleValueUsdc, type OracleValueQuote } from '../lib/pythOracle';
 import { useI18n } from '../i18n';
 import { PageBreadcrumbsBar, PageHeroBadge, PageHeroShell } from './PageChrome';
 
 const SUI_COIN_TYPE = '0x2::sui::SUI';
 const EVENT_LIMIT = 80;
 const MIST_DECIMALS = 9;
+const USDC_DECIMALS = 6;
 
 type CoinLike = {
   coinObjectId: string;
@@ -24,7 +26,7 @@ type VaultRow = {
   assetType: string;
   positionKind: string;
   balance: bigint;
-  valueSui: bigint;
+  valueUsdc: bigint;
 };
 
 type ExternalPositionRow = {
@@ -35,15 +37,15 @@ type ExternalPositionRow = {
   protocol: string;
   externalObjectId: string;
   amount: bigint;
-  principalValueSui: bigint;
-  currentValueSui: bigint;
+  principalValueUsdc: bigint;
+  currentValueUsdc: bigint;
   active: boolean;
 };
 
 type BasketSnapshot = {
-  navSui: bigint;
+  navUsdc: bigint;
   liquidSui: bigint;
-  managedValueSui: bigint;
+  managedValueUsdc: bigint;
   vaults: VaultRow[];
   externalPositions: ExternalPositionRow[];
 };
@@ -52,7 +54,7 @@ type ManagedForm = {
   coinType: string;
   vaultId: string;
   amount: string;
-  valueSui: string;
+  valueUsdc: string;
   recipient: string;
   positionKind: string;
 };
@@ -65,8 +67,8 @@ type ExternalForm = {
   protocol: string;
   externalObjectId: string;
   amount: string;
-  principalValueSui: string;
-  currentValueSui: string;
+  principalValueUsdc: string;
+  currentValueUsdc: string;
   active: boolean;
 };
 
@@ -181,9 +183,9 @@ function getDigest(result: unknown, missingMessage: string): string {
   return digest;
 }
 
-function readBasketSnapshot(objectData: unknown): Pick<BasketSnapshot, 'navSui' | 'liquidSui' | 'managedValueSui' | 'externalPositions'> {
+function readBasketSnapshot(objectData: unknown): Pick<BasketSnapshot, 'navUsdc' | 'liquidSui' | 'managedValueUsdc' | 'externalPositions'> {
   const fields = asRecord(asRecord(asRecord(objectData).content).fields);
-  const tokenValueEntries = readVecMapEntries(fields.token_values_sui);
+  const tokenValueEntries = readVecMapEntries(fields.token_values_usdc);
   const externalEntries = readVecMapEntries(fields.external_positions);
   const externalPositions = externalEntries.map((entry) => {
     const value = asRecord(entry.value);
@@ -195,17 +197,17 @@ function readBasketSnapshot(objectData: unknown): Pick<BasketSnapshot, 'navSui' 
       protocol: readString(value.protocol),
       externalObjectId: readString(value.external_object_id),
       amount: readBigInt(value.amount),
-      principalValueSui: readBigInt(value.principal_value_sui),
-      currentValueSui: readBigInt(value.current_value_sui),
+      principalValueUsdc: readBigInt(value.principal_value_usdc),
+      currentValueUsdc: readBigInt(value.current_value_usdc),
       active: Boolean(value.active),
     };
   });
 
   return {
-    navSui: readBigInt(fields.nav_sui),
+    navUsdc: readBigInt(fields.nav_usdc),
     liquidSui: readBalance(fields.sui_vault),
-    managedValueSui: tokenValueEntries.reduce((sum, entry) => sum + readBigInt(entry.value), 0n)
-      + externalPositions.reduce((sum, item) => sum + (item.active ? item.currentValueSui : 0n), 0n),
+    managedValueUsdc: tokenValueEntries.reduce((sum, entry) => sum + readBigInt(entry.value), 0n)
+      + externalPositions.reduce((sum, item) => sum + (item.active ? item.currentValueUsdc : 0n), 0n),
     externalPositions,
   };
 }
@@ -223,11 +225,13 @@ export function FundBasketPage() {
   const [notice, setNotice] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [lastDigest, setLastDigest] = React.useState<string | null>(null);
+  const [oracleBusy, setOracleBusy] = React.useState(false);
+  const [oracleQuote, setOracleQuote] = React.useState<OracleValueQuote | null>(null);
   const [managedForm, setManagedForm] = React.useState<ManagedForm>({
     coinType: SUI_COIN_TYPE,
     vaultId: '',
     amount: '',
-    valueSui: '',
+    valueUsdc: '',
     recipient: '',
     positionKind: 'coin',
   });
@@ -239,8 +243,8 @@ export function FundBasketPage() {
     protocol: '',
     externalObjectId: '',
     amount: '0',
-    principalValueSui: '0',
-    currentValueSui: '0',
+    principalValueUsdc: '0',
+    currentValueUsdc: '0',
     active: true,
   });
 
@@ -254,7 +258,10 @@ export function FundBasketPage() {
     [managedForm.vaultId, snapshot?.vaults],
   );
 
-  const patchManagedForm = (patch: Partial<ManagedForm>) => setManagedForm((current) => ({ ...current, ...patch }));
+  const patchManagedForm = (patch: Partial<ManagedForm>) => {
+    setOracleQuote(null);
+    setManagedForm((current) => ({ ...current, ...patch }));
+  };
   const patchExternalForm = (patch: Partial<ExternalForm>) => setExternalForm((current) => ({ ...current, ...patch }));
 
   const load = React.useCallback(async () => {
@@ -282,13 +289,13 @@ export function FundBasketPage() {
 
       const baseSnapshot = basketObject?.data
         ? readBasketSnapshot(basketObject.data)
-        : { navSui: 0n, liquidSui: 0n, managedValueSui: 0n, externalPositions: [] };
+        : { navUsdc: 0n, liquidSui: 0n, managedValueUsdc: 0n, externalPositions: [] };
 
       const valueByVault = new Map<string, bigint>();
       for (const event of depositEvents.data) {
         const fields = asRecord(event.parsedJson);
         const vaultId = readString(fields.vault_id);
-        const value = readBigInt(fields.value_sui);
+        const value = readBigInt(fields.value_usdc);
         if (!vaultId) {
           continue;
         }
@@ -297,7 +304,7 @@ export function FundBasketPage() {
       for (const event of withdrawEvents.data) {
         const fields = asRecord(event.parsedJson);
         const vaultId = readString(fields.vault_id);
-        const value = readBigInt(fields.value_sui);
+        const value = readBigInt(fields.value_usdc);
         if (!vaultId) {
           continue;
         }
@@ -321,7 +328,7 @@ export function FundBasketPage() {
           assetType: readString(fields.asset_type),
           positionKind: readString(fields.position_kind),
           balance,
-          valueSui: valueByVault.get(vaultId) ?? 0n,
+          valueUsdc: valueByVault.get(vaultId) ?? 0n,
         };
       }));
 
@@ -391,9 +398,9 @@ export function FundBasketPage() {
       throw new Error(t.errors.vaultIdRequired);
     }
     const amount = parseDecimalAmount(managedForm.amount, selectedToken.decimals);
-    const valueSui = parseDecimalAmount(managedForm.valueSui, MIST_DECIMALS);
-    if (!amount || amount <= 0n || valueSui === null) {
-      throw new Error(t.errors.fillAmountValueSui);
+    const valueUsdc = parseDecimalAmount(managedForm.valueUsdc, USDC_DECIMALS);
+    if (!amount || amount <= 0n || valueUsdc === null) {
+      throw new Error(t.errors.fillAmountValueUsdc);
     }
 
     const tx = new Transaction();
@@ -410,10 +417,39 @@ export function FundBasketPage() {
         tx.object(SUI_FUND_CONFIG.basketId),
         tx.object(managedForm.vaultId),
         payment,
-        tx.pure.u64(valueSui),
+        tx.pure.u64(valueUsdc),
       ],
     });
     await runTransaction('deposit', tx);
+  }
+
+  async function handleCalculateOracleValue() {
+    if (!selectedToken) {
+      throw new Error(t.errors.pickTokenVault);
+    }
+    const amount = parseDecimalAmount(managedForm.amount, selectedToken.decimals);
+    if (!amount || amount <= 0n) {
+      throw new Error(t.errors.oracleAmountRequired);
+    }
+
+    setOracleBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const quote = await calculateOracleValueUsdc({
+        amountBaseUnits: amount,
+        tokenDecimals: selectedToken.decimals,
+        tokenPriceFeedId: selectedToken.price_feed_id,
+        tokenSymbol: selectedToken.symbol,
+      });
+      setOracleQuote(quote);
+      setManagedForm((current) => ({ ...current, valueUsdc: quote.valueUsdc }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message || t.errors.oraclePriceUnavailable);
+    } finally {
+      setOracleBusy(false);
+    }
   }
 
   async function handleWithdrawManagedAsset() {
@@ -422,9 +458,9 @@ export function FundBasketPage() {
       throw new Error(t.errors.pickTokenVault);
     }
     const amount = parseDecimalAmount(managedForm.amount, selectedToken.decimals);
-    const valueSui = parseDecimalAmount(managedForm.valueSui, MIST_DECIMALS);
-    if (!amount || amount <= 0n || valueSui === null) {
-      throw new Error(t.errors.fillAmountValueSui);
+    const valueUsdc = parseDecimalAmount(managedForm.valueUsdc, USDC_DECIMALS);
+    if (!amount || amount <= 0n || valueUsdc === null) {
+      throw new Error(t.errors.fillAmountValueUsdc);
     }
     const recipient = managedForm.recipient.trim() || account?.address || '';
     if (!recipient) {
@@ -439,7 +475,7 @@ export function FundBasketPage() {
         tx.object(SUI_FUND_CONFIG.basketId),
         tx.object(managedForm.vaultId),
         tx.pure.u64(amount),
-        tx.pure.u64(valueSui),
+        tx.pure.u64(valueUsdc),
         tx.pure.address(recipient),
       ],
     });
@@ -451,9 +487,9 @@ export function FundBasketPage() {
     if (!selectedToken || !managedForm.vaultId) {
       throw new Error(t.errors.pickTokenVault);
     }
-    const valueSui = parseDecimalAmount(managedForm.valueSui, MIST_DECIMALS);
-    if (valueSui === null) {
-      throw new Error(t.errors.valueSuiRequired);
+    const valueUsdc = parseDecimalAmount(managedForm.valueUsdc, USDC_DECIMALS);
+    if (valueUsdc === null) {
+      throw new Error(t.errors.valueUsdcRequired);
     }
     const tx = new Transaction();
     tx.moveCall({
@@ -463,7 +499,7 @@ export function FundBasketPage() {
         tx.object(SUI_FUND_CONFIG.managerCapId),
         tx.object(SUI_FUND_CONFIG.basketId),
         tx.object(managedForm.vaultId),
-        tx.pure.u64(valueSui),
+        tx.pure.u64(valueUsdc),
       ],
     });
     await runTransaction('set-value', tx);
@@ -485,8 +521,8 @@ export function FundBasketPage() {
         tx.pure.string(externalForm.protocol),
         tx.pure.string(externalForm.externalObjectId),
         tx.pure.u64(parseU64(externalForm.amount, t.amount, t.errors.u64Integer)),
-        tx.pure.u64(parseDecimalAmount(externalForm.principalValueSui, MIST_DECIMALS) ?? 0n),
-        tx.pure.u64(parseDecimalAmount(externalForm.currentValueSui, MIST_DECIMALS) ?? 0n),
+        tx.pure.u64(parseDecimalAmount(externalForm.principalValueUsdc, USDC_DECIMALS) ?? 0n),
+        tx.pure.u64(parseDecimalAmount(externalForm.currentValueUsdc, USDC_DECIMALS) ?? 0n),
         tx.pure.bool(externalForm.active),
       ],
     });
@@ -502,7 +538,7 @@ export function FundBasketPage() {
         tx.object(SUI_FUND_CONFIG.managerCapId),
         tx.object(SUI_FUND_CONFIG.basketId),
         tx.pure.string(positionId || externalForm.positionId),
-        tx.pure.u64(parseDecimalAmount(externalForm.currentValueSui, MIST_DECIMALS) ?? 0n),
+        tx.pure.u64(parseDecimalAmount(externalForm.currentValueUsdc, USDC_DECIMALS) ?? 0n),
       ],
     });
     await runTransaction('close-external', tx);
@@ -543,19 +579,19 @@ export function FundBasketPage() {
                 <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
                   {t.nav} <Database className="h-4 w-4 text-teal-100" />
                 </div>
-                <div className="mt-4 text-2xl font-semibold text-white">{snapshot ? `${formatUnits(snapshot.navSui, 9, 6)}${t.suiSuffix}` : t.loadingEllipsis}</div>
+                <div className="mt-4 text-2xl font-semibold text-white">{snapshot ? `${formatUnits(snapshot.navUsdc, USDC_DECIMALS, 6)}${t.usdcSuffix}` : t.loadingEllipsis}</div>
               </div>
               <div className="rounded-[1.5rem] border border-white/[0.08] bg-white/[0.04] p-5">
                 <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
                   {t.liquidSui} <Wallet className="h-4 w-4 text-teal-100" />
                 </div>
-                <div className="mt-4 text-2xl font-semibold text-white">{snapshot ? `${formatUnits(snapshot.liquidSui, 9, 6)}${t.suiSuffix}` : t.loadingEllipsis}</div>
+                <div className="mt-4 text-2xl font-semibold text-white">{snapshot ? `${formatUnits(snapshot.liquidSui, MIST_DECIMALS, 6)}${t.suiSuffix}` : t.loadingEllipsis}</div>
               </div>
               <div className="rounded-[1.5rem] border border-white/[0.08] bg-white/[0.04] p-5">
                 <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
                   {t.managedValue} <Layers3 className="h-4 w-4 text-teal-100" />
                 </div>
-                <div className="mt-4 text-2xl font-semibold text-white">{snapshot ? `${formatUnits(snapshot.managedValueSui, 9, 6)}${t.suiSuffix}` : t.loadingEllipsis}</div>
+                <div className="mt-4 text-2xl font-semibold text-white">{snapshot ? `${formatUnits(snapshot.managedValueUsdc, USDC_DECIMALS, 6)}${t.usdcSuffix}` : t.loadingEllipsis}</div>
               </div>
             </div>
 
@@ -594,7 +630,7 @@ export function FundBasketPage() {
                             <td className="px-3 py-4 font-mono text-xs">{shortId(vault.vaultId, t.notAvailableShort)}</td>
                             <td className="px-3 py-4 text-xs">{vault.positionKind}</td>
                             <td className="px-3 py-4 font-mono text-xs">{formatUnits(vault.balance, token?.decimals ?? 9, 6)}</td>
-                            <td className="px-3 py-4 font-mono text-xs">{formatUnits(vault.valueSui, 9, 6)}{t.suiSuffix}</td>
+                            <td className="px-3 py-4 font-mono text-xs">{formatUnits(vault.valueUsdc, USDC_DECIMALS, 6)}{t.usdcSuffix}</td>
                             <td className="px-3 py-4">
                               <button type="button" className="text-xs font-semibold text-teal-200 hover:text-teal-100" onClick={() => patchManagedForm({ coinType: vault.assetType, vaultId: vault.vaultId })}>
                                 {t.use}
@@ -624,11 +660,25 @@ export function FundBasketPage() {
                       <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{t.amount}</label>
                       <input className={inputClass} value={managedForm.amount} onChange={(event) => patchManagedForm({ amount: event.target.value })} placeholder={t.placeholderAmount} />
                     </div>
-                    <div>
-                      <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{t.valueInSui}</label>
-                      <input className={inputClass} value={managedForm.valueSui} onChange={(event) => patchManagedForm({ valueSui: event.target.value })} placeholder={t.placeholderValueSui} />
-                    </div>
-                  </div>
+	                    <div>
+	                      <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{t.valueInUsdc}</label>
+	                      <input className={inputClass} value={managedForm.valueUsdc} onChange={(event) => patchManagedForm({ valueUsdc: event.target.value })} placeholder={t.placeholderValueUsdc} />
+	                      <button
+	                        type="button"
+	                        className="mt-2 inline-flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-sky-300/25 bg-sky-300/10 px-3 text-xs font-bold text-sky-100 transition hover:bg-sky-300/15 disabled:opacity-60"
+	                        disabled={oracleBusy || Boolean(busy)}
+	                        onClick={() => void handleCalculateOracleValue()}
+	                      >
+	                        <RefreshCw className={`h-3.5 w-3.5 ${oracleBusy ? 'animate-spin' : ''}`} />
+	                        {oracleBusy ? t.oracleEstimateBusy : t.oracleEstimate}
+	                      </button>
+	                      {oracleQuote ? (
+	                        <div className="mt-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-xs leading-5 text-slate-400">
+	                          {t.oracleQuotePrefix}: {t.oracleValueLabel} {oracleQuote.valueUsdc} USDC · {t.oracleTokenPriceLabel} ${oracleQuote.tokenUsdPrice.toFixed(6)} · {t.oracleSuiPriceLabel} ${oracleQuote.suiUsdPrice.toFixed(6)}
+	                        </div>
+	                      ) : null}
+	                    </div>
+	                  </div>
 
                   <label className="block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{t.positionKind}</label>
                   <input className={inputClass} value={managedForm.positionKind} onChange={(event) => patchManagedForm({ positionKind: event.target.value })} placeholder={t.placeholderPositionKind} />
@@ -683,15 +733,15 @@ export function FundBasketPage() {
                               protocol: position.protocol,
                               externalObjectId: position.externalObjectId,
                               amount: position.amount.toString(),
-                              principalValueSui: formatUnits(position.principalValueSui, 9, 9),
-                              currentValueSui: formatUnits(position.currentValueSui, 9, 9),
+                              principalValueUsdc: formatUnits(position.principalValueUsdc, USDC_DECIMALS, USDC_DECIMALS),
+                              currentValueUsdc: formatUnits(position.currentValueUsdc, USDC_DECIMALS, USDC_DECIMALS),
                               active: position.active,
                             })}>{position.positionId}</button>
                           </td>
                           <td className="px-3 py-4">{position.protocol}</td>
                           <td className="px-3 py-4 font-mono text-xs">{shortId(position.assetType, t.notAvailableShort)}</td>
                           <td className="px-3 py-4 font-mono text-xs">{position.amount.toString()}</td>
-                          <td className="px-3 py-4 font-mono text-xs">{formatUnits(position.currentValueSui, 9, 6)}{t.suiSuffix}</td>
+                          <td className="px-3 py-4 font-mono text-xs">{formatUnits(position.currentValueUsdc, USDC_DECIMALS, 6)}{t.usdcSuffix}</td>
                           <td className={position.active ? 'px-3 py-4 text-emerald-200' : 'px-3 py-4 text-slate-500'}>{position.active ? t.statusActive : t.statusClosed}</td>
                         </tr>
                       ))}
@@ -710,8 +760,8 @@ export function FundBasketPage() {
                   <input className={`${inputClass} font-mono text-xs`} value={externalForm.externalObjectId} onChange={(event) => patchExternalForm({ externalObjectId: event.target.value })} placeholder={t.placeholderExternalObjectId} />
                   <div className="grid gap-3 sm:grid-cols-3">
                     <input className={inputClass} value={externalForm.amount} onChange={(event) => patchExternalForm({ amount: event.target.value })} placeholder={t.placeholderRawAmount} />
-                    <input className={inputClass} value={externalForm.principalValueSui} onChange={(event) => patchExternalForm({ principalValueSui: event.target.value })} placeholder={t.placeholderPrincipalSui} />
-                    <input className={inputClass} value={externalForm.currentValueSui} onChange={(event) => patchExternalForm({ currentValueSui: event.target.value })} placeholder={t.placeholderCurrentSui} />
+                    <input className={inputClass} value={externalForm.principalValueUsdc} onChange={(event) => patchExternalForm({ principalValueUsdc: event.target.value })} placeholder={t.placeholderPrincipalUsdc} />
+                    <input className={inputClass} value={externalForm.currentValueUsdc} onChange={(event) => patchExternalForm({ currentValueUsdc: event.target.value })} placeholder={t.placeholderCurrentUsdc} />
                   </div>
                   <label className="flex items-center gap-2 text-sm text-slate-400">
                     <input type="checkbox" checked={externalForm.active} onChange={(event) => patchExternalForm({ active: event.target.checked })} />

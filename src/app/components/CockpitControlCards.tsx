@@ -114,6 +114,7 @@ type CockpitControlCardsProps = {
 const ACTIVE_WALLET_KEY = 'av8fund.active-wallet';
 const ACTIVE_WALLET_EVENT = 'av8fund:active-wallet';
 const ACTIVE_WALLET_REFRESH_EVENT = 'av8fund:active-wallet-refresh';
+const SUI_COIN_TYPE = '0x2::sui::SUI';
 const DEFAULT_TOKEN_LOGOS: Record<string, string> = {
   sui: 'https://assets.coingecko.com/coins/images/26375/large/sui-ocean-square.png',
   usdc: 'https://assets.coingecko.com/coins/images/6319/large/usdc.png',
@@ -396,6 +397,69 @@ function parseDecimalToBigInt(value: string, decimals: number): bigint | null {
   const serialized = `${whole}${paddedFraction}`.replace(/^0+(?=\d)/, '');
 
   return BigInt(serialized || '0');
+}
+
+function encodeErc20TransferData(recipient: string, amount: bigint): string {
+  const to = recipient.trim().replace(/^0x/i, '').padStart(64, '0');
+  const value = amount.toString(16).padStart(64, '0');
+  return `0xa9059cbb${to}${value}`;
+}
+
+async function buildSuiCoinTransfer(params: {
+  client: SuiClient;
+  tx: Transaction;
+  sender: string;
+  recipient: string;
+  coinType: string;
+  amount: bigint;
+}) {
+  const coinType = String(params.coinType || SUI_COIN_TYPE).trim() || SUI_COIN_TYPE;
+  const recipient = normalizeSuiAddress(params.recipient);
+
+  if (coinType === SUI_COIN_TYPE) {
+    const [coin] = params.tx.splitCoins(params.tx.gas, [params.amount]);
+    params.tx.transferObjects([coin], recipient);
+    return;
+  }
+
+  let cursor: string | null | undefined = null;
+  const coins: { coinObjectId: string; balance: string }[] = [];
+  for (;;) {
+    const page = await params.client.getCoins({
+      owner: params.sender,
+      coinType,
+      cursor,
+      limit: 100,
+    });
+    coins.push(...page.data.map((coin) => ({ coinObjectId: coin.coinObjectId, balance: coin.balance })));
+    if (!page.hasNextPage) {
+      break;
+    }
+    cursor = page.nextCursor ?? null;
+  }
+
+  if (coins.length === 0) {
+    throw new Error('Selected coin is not available in this wallet.');
+  }
+
+  const total = coins.reduce((sum, coin) => sum + BigInt(coin.balance), 0n);
+  if (total < params.amount) {
+    throw new Error('Insufficient selected coin balance.');
+  }
+
+  const primary = coins.reduce((a, b) => (BigInt(a.balance) >= BigInt(b.balance) ? a : b));
+  const primaryCoin = params.tx.object(primary.coinObjectId);
+  const mergeCoins = coins.filter((coin) => coin.coinObjectId !== primary.coinObjectId);
+  if (mergeCoins.length > 0) {
+    params.tx.mergeCoins(primaryCoin, mergeCoins.map((coin) => params.tx.object(coin.coinObjectId)));
+  }
+
+  if (total === params.amount) {
+    params.tx.transferObjects([primaryCoin], recipient);
+  } else {
+    const [coin] = params.tx.splitCoins(primaryCoin, [params.amount]);
+    params.tx.transferObjects([coin], recipient);
+  }
 }
 
 async function loadGoogleIdentityScript(): Promise<GoogleAccountsId> {
@@ -748,6 +812,7 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
   const [isRefreshingWalletData, setIsRefreshingWalletData] = React.useState(false);
   const [isReceiveOpen, setIsReceiveOpen] = React.useState(false);
   const [isSendOpen, setIsSendOpen] = React.useState(false);
+  const [sendCoinKey, setSendCoinKey] = React.useState('');
   const [sendTo, setSendTo] = React.useState('');
   const [sendAmount, setSendAmount] = React.useState('');
   const [sendError, setSendError] = React.useState<string | null>(null);
@@ -1176,6 +1241,43 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
     const address = String(token.address || '').trim().toLowerCase();
     return tokenLogoByAddress[address] || tokenFallbackLogo(token.symbol, address);
   }, [tokenLogoByAddress]);
+  const sendCoinOptions = React.useMemo(() => {
+    return filteredNetworkTokens
+      .map((token) => {
+        const address = String(token.address || '').trim();
+        const key = address.toLowerCase();
+        const tokenKey = `${normalizeHexChainId(token.chain_id) || token.chain_id}:${key}`;
+        const amount = tokenAmountsByAddress[key] || tokenAmountsByKey[tokenKey];
+        return {
+          key,
+          address,
+          symbol: String(token.symbol || '').trim() || 'COIN',
+          name: String(token.name || token.symbol || '').trim() || 'Coin',
+          decimals: Number.isFinite(token.decimals) ? token.decimals : (isSuiNetworkActive ? 9 : 18),
+          balance: amount?.balance || '',
+        };
+      })
+      .filter((token) => token.address);
+  }, [filteredNetworkTokens, isSuiNetworkActive, tokenAmountsByAddress, tokenAmountsByKey]);
+  const selectedSendCoin = React.useMemo(() => {
+    return sendCoinOptions.find((token) => token.key === sendCoinKey) || sendCoinOptions[0] || null;
+  }, [sendCoinKey, sendCoinOptions]);
+  const selectedSendCoinBalance = selectedSendCoin?.balance
+    ? `${selectedSendCoin.balance} ${selectedSendCoin.symbol}`
+    : selectedSendCoin?.symbol || '';
+
+  React.useEffect(() => {
+    if (!isSendOpen) {
+      return;
+    }
+    if (sendCoinOptions.length === 0) {
+      setSendCoinKey('');
+      return;
+    }
+    if (!sendCoinOptions.some((token) => token.key === sendCoinKey)) {
+      setSendCoinKey(sendCoinOptions[0].key);
+    }
+  }, [isSendOpen, sendCoinKey, sendCoinOptions]);
 
   React.useEffect(() => {
     setExternalSession(readExternalWalletSession());
@@ -1793,7 +1895,8 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
       });
       setIdentitySession(readIdentitySession());
 
-      if (!SUI_GOOGLE_CLIENT_ID) {
+      const zkLoginConfig = await getZkLoginConfigCached();
+      if (!zkLoginConfig.googleClientId) {
         setExternalError('Google client ID is missing.');
         return;
       }
@@ -1820,13 +1923,21 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
   const renderGoogleSuiButtonInto = React.useCallback(async (container: HTMLElement) => {
     container.innerHTML = '';
 
-    if (!SUI_GOOGLE_CLIENT_ID || typeof window === 'undefined') {
+    if (typeof window === 'undefined') {
+      logFrontendDiagnostic('zklogin-google-button-skip-missing-client', {}, 'zklogin');
+      return;
+    }
+
+    const zkLoginConfig = await getZkLoginConfigCached();
+    const googleClientId = zkLoginConfig.googleClientId || SUI_GOOGLE_CLIENT_ID;
+    if (!googleClientId) {
       logFrontendDiagnostic('zklogin-google-button-skip-missing-client', {}, 'zklogin');
       return;
     }
 
     logFrontendDiagnostic('zklogin-google-button-prepare-start', {
       containerWidth: container.clientWidth || 0,
+      serverClientIdMatchesBuild: googleClientId === SUI_GOOGLE_CLIENT_ID,
     }, 'zklogin');
     const pending = await ensurePendingZkLoginSetup(suiClient);
     logFrontendDiagnostic('zklogin-google-button-pending-ready', {
@@ -1835,14 +1946,14 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
       createdAt: pending.createdAt,
     }, 'zklogin');
     const googleIdentity = await loadGoogleIdentityScript();
-    const initializeKey = `zklogin:${SUI_GOOGLE_CLIENT_ID}:${pending.nonce}`;
+    const initializeKey = `zklogin:${googleClientId}:${pending.nonce}`;
     if (getGoogleIdentityInitializeKey() !== initializeKey) {
       googleIdentity.cancel();
       logFrontendDiagnostic('zklogin-google-initialize', {
         initializeKeyLen: initializeKey.length,
       }, 'zklogin');
       googleIdentity.initialize({
-        client_id: SUI_GOOGLE_CLIENT_ID,
+        client_id: googleClientId,
         nonce: pending.nonce,
         ux_mode: 'popup',
         use_fedcm_for_prompt: false,
@@ -2517,6 +2628,7 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
       connectionStatus,
       hasExtensionAddress: Boolean(extensionAddressForSend),
       activeWalletWeb3auth: activeWalletForBroadcast?.web3auth,
+      sendCoin: selectedSendCoin?.address,
       sendAmountLen: sendAmount.trim().length,
       sendToLen: sendTo.trim().length,
     }, 'send');
@@ -2527,8 +2639,12 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
     }
 
     if (activeWalletIsSui) {
-      const mist = parseDecimalToBigInt(sendAmount, 9);
-      if (!mist || mist <= 0n) {
+      if (!selectedSendCoin?.address) {
+        setSendError('Выберите монету для отправки.');
+        return;
+      }
+      const transferAmount = parseDecimalToBigInt(sendAmount, selectedSendCoin.decimals);
+      if (!transferAmount || transferAmount <= 0n) {
         logFrontendDiagnostic('send-early-invalid-sui-amount', {
           sendAmount,
         }, 'send');
@@ -2640,6 +2756,7 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
           hasZkLoginSession: Boolean(zkLoginSessionForSend),
           hasZkLoginToken: Boolean(zkLoginSessionForSend?.token),
           sender: resolvedSender,
+          coinType: selectedSendCoin.address,
         }, 'sui-send');
 
         const zkLoginRuntimeConfig = await getZkLoginConfigCached();
@@ -2662,9 +2779,14 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
 
           const tx = new Transaction();
           tx.setSender(resolvedSender);
-
-          const [coin] = tx.splitCoins(tx.gas, [mist]);
-          tx.transferObjects([coin], normalizeSuiAddress(sendTo.trim()));
+          await buildSuiCoinTransfer({
+            client: suiClient,
+            tx,
+            sender: resolvedSender,
+            recipient: sendTo.trim(),
+            coinType: selectedSendCoin.address,
+            amount: transferAmount,
+          });
 
           if (suiSendSigningRoute.useExtension) {
             const result = await signAndExecuteTransaction({ transaction: tx });
@@ -2717,7 +2839,8 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
             client: suiClient,
             sender: resolvedSender,
             recipient: sendTo.trim(),
-            amountMist: mist,
+            amountMist: transferAmount,
+            coinType: selectedSendCoin.address,
           });
           logFrontendDiagnostic('sui-send-sponsor-start', {
             sender: resolvedSender,
@@ -2826,8 +2949,13 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
       return;
     }
 
-    const wei = parseDecimalToBigInt(sendAmount, 18);
-    if (!wei || wei <= 0n) {
+    if (!selectedSendCoin?.address || !isValidEvmAddress(selectedSendCoin.address)) {
+      setSendError('Выберите монету для отправки.');
+      return;
+    }
+
+    const evmAmount = parseDecimalToBigInt(sendAmount, selectedSendCoin.decimals || 18);
+    if (!evmAmount || evmAmount <= 0n) {
       setSendError(messages.hero.sendInvalidAmount);
       return;
     }
@@ -2848,8 +2976,9 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
         method: 'eth_sendTransaction',
         params: [{
           from: displayWalletAddress,
-          to: sendTo.trim(),
-          value: `0x${wei.toString(16)}`,
+          to: selectedSendCoin.address,
+          value: '0x0',
+          data: encodeErc20TransferData(sendTo.trim(), evmAmount),
         }],
       });
       setSendSuccess(messages.hero.sendSuccess);
@@ -2880,6 +3009,7 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
     messages.hero.sendSuiWalletRequired,
     messages.hero.sendZkLoginNeedSessionHint,
     messages.hero.sendZkLoginSignInFirst,
+    selectedSendCoin,
     sendAmount,
     sendTo,
     signAndExecuteTransaction,
@@ -3318,130 +3448,6 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
       </div>
       </div>
 
-      {isSuiNetworkActive ? (
-        <div className="mt-6 rounded-[1.5rem] border border-white/[0.1] bg-[rgba(5,9,18,0.72)] p-4 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-sm sm:rounded-[1.75rem] sm:p-5">
-          <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <div className="text-xs uppercase tracking-[0.18em] text-slate-400">{messages.portfolio.cockpitInvestHeading}</div>
-              <div className="mt-1 text-xl font-semibold text-white">Депозит AV8</div>
-            </div>
-            <div className="rounded-full bg-white/5 px-3 py-1 text-xs uppercase tracking-[0.14em] text-slate-300">
-              {SUI_FUND_CONFIG.network}
-            </div>
-          </div>
-
-          <div className="mb-4 grid gap-3 sm:grid-cols-2">
-            <div className="relative overflow-hidden rounded-[1.4rem] border border-sky-400/25 bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.22),_transparent_55%),rgba(8,47,73,0.75)] p-4 shadow-[0_0_35px_rgba(56,189,248,0.12)]">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-200/80">
-                {investInterpolate(inv.depositAvailableTokenCard, depositToken.symbol)}
-              </div>
-              <div className="mt-2 text-xl font-semibold text-white">
-                {balancesLoading ? inv.depositLoading : investBalanceLabel}
-              </div>
-              <div className="mt-1 text-xs text-sky-100/70">{inv.depositWalletDetectionHint}</div>
-            </div>
-            <div className="relative overflow-hidden rounded-[1.4rem] border border-emerald-400/25 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.2),_transparent_55%),rgba(6,46,30,0.76)] p-4 shadow-[0_0_35px_rgba(16,185,129,0.12)]">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-200/80">{inv.depositAv8ShareCard}</div>
-              <div className="mt-2 text-xl font-semibold text-white">
-                {balancesLoading ? inv.depositLoading : redeemBalanceLabel}
-              </div>
-              <div className="mt-1 text-xs text-emerald-100/70">{inv.depositAv8WithdrawHint}</div>
-            </div>
-          </div>
-
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="rounded-2xl border border-white/[0.08] bg-white/[0.035] p-4">
-              <div className="mb-4 text-sm font-semibold uppercase tracking-[0.16em] text-sky-100">Добавить в депозит</div>
-              <label className="block">
-                <select
-                  value={depositToken.coinType}
-                  onChange={(event) => setDepositTokenSymbol(event.target.value)}
-                  className="mt-2 w-full rounded-2xl border border-white/[0.1] bg-[rgba(5,9,18,0.82)] px-4 py-3 text-base font-medium text-white outline-none shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-sm transition-[border-color,box-shadow] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] focus:border-teal-400/40"
-                >
-                  {depositTokenOptions.map((token) => (
-                    <option key={token.coinType} value={token.coinType}>
-                      {token.symbol} - {formatDepositTokenBalance(token)}
-                    </option>
-                  ))}
-                </select>
-                <div className="mt-2 text-xs font-semibold normal-case tracking-normal text-slate-500">
-                  {inv.depositAvailableInWalletPrefix} {formatDepositTokenBalance(depositToken)}
-                </div>
-              </label>
-              <label className="mt-4 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
-                {inv.depositAmountFieldLabel}
-                <input
-                  type="number"
-                  min="0"
-                  step="any"
-                  value={investAmount}
-                  onChange={(event) => setInvestAmount(event.target.value)}
-                  className="mt-2 w-full rounded-2xl border border-white/[0.1] bg-[rgba(5,9,18,0.82)] px-4 py-3 text-base font-medium text-white outline-none shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-sm transition-[border-color,box-shadow] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] focus:border-teal-400/40"
-                  placeholder={`1 ${depositToken.symbol}`}
-                />
-              </label>
-              <button
-                type="button"
-                onClick={() => void handleInvestDeposit()}
-                disabled={actionState.busy || !depositToken.executable}
-                className="mt-4 flex w-full items-center justify-center rounded-2xl bg-gradient-to-r from-sky-400 to-cyan-300 px-4 py-3 font-semibold text-slate-950 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {actionState.busy ? messages.portfolio.cockpitSubmittingPtb : messages.portfolio.cockpitDeployCapital}
-              </button>
-            </div>
-
-            <div className="rounded-2xl border border-white/[0.08] bg-white/[0.035] p-4">
-              <div className="mb-4 text-sm font-semibold uppercase tracking-[0.16em] text-emerald-100">Забрать из депозита</div>
-              <label className="block">
-                <input
-                  type="number"
-                  min="0"
-                  step="0.000001"
-                  value={redeemAmount}
-                  onChange={(event) => setRedeemAmount(event.target.value)}
-                  className="mt-2 w-full rounded-2xl border border-white/[0.1] bg-[rgba(5,9,18,0.82)] px-4 py-3 text-base font-medium text-white outline-none shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)] backdrop-blur-sm transition-[border-color,box-shadow] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] focus:border-teal-400/40"
-                  placeholder="1.000000"
-                />
-              </label>
-              <button
-                type="button"
-                onClick={() => void handleRedeemWithdraw()}
-                disabled={actionState.busy}
-                className="mt-4 flex w-full items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-4 py-3 font-semibold text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {actionState.busy ? messages.portfolio.cockpitSubmittingPtb : messages.portfolio.cockpitRecallLiquidity}
-              </button>
-            </div>
-          </div>
-
-          {investRouteNotice ? (
-            <div className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">
-              {investRouteNotice}
-            </div>
-          ) : null}
-
-          {!depositToken.executable ? (
-            <div className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">
-              {depositToken.whitelisted
-                ? investInterpolate(inv.depositRouteBlockedWhitelisted, depositToken.symbol)
-                : investInterpolate(inv.depositRouteBlockedNotWhitelisted, depositToken.symbol)}
-            </div>
-          ) : null}
-
-          {actionState.error ? (
-            <div className="mt-4 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">
-              {actionState.error}
-            </div>
-          ) : null}
-
-          {actionState.lastDigest ? (
-            <div className="mt-4 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm text-emerald-100">
-              Executed transaction: {actionState.lastDigest}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
       <Dialog
         open={isReceiveOpen}
         onOpenChange={(open) => {
@@ -3487,19 +3493,42 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
         <DialogContent className="max-w-lg border-white/[0.1] bg-[rgba(5,9,18,0.97)] text-slate-100 shadow-[0_30px_120px_rgba(2,6,23,0.7)] backdrop-blur-xl">
           <DialogHeader className="text-left">
             <DialogTitle className="text-xl font-semibold text-white">{messages.hero.sendTitle}</DialogTitle>
-            <DialogDescription className="text-sm text-slate-400">
-              {activeWalletIsSui
-                ? suiSendSigningRoute.useExtension
+            {activeWalletIsSui ? (
+              <DialogDescription className="text-sm text-slate-400">
+                {suiSendSigningRoute.useExtension
                   ? messages.hero.sendSignHintExtension
                   : suiSendSigningRoute.useZkLogin
                     ? messages.hero.sendSignHintZkLogin
                     : activeWalletForBroadcast?.web3auth === 0
                       ? messages.hero.sendSuiWalletRequired
-                      : messages.hero.sendZkLoginNeedSessionHint
-                : messages.hero.sendNativeHint}
-            </DialogDescription>
+                      : messages.hero.sendZkLoginNeedSessionHint}
+              </DialogDescription>
+            ) : null}
           </DialogHeader>
           <div className="mt-4 space-y-3">
+            <label className="block text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+              {messages.hero.sendCoinLabel}
+              <select
+                value={sendCoinKey}
+                onChange={(event) => setSendCoinKey(event.target.value)}
+                className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-2.5 text-sm text-white outline-none focus:border-sky-400/40"
+              >
+                {sendCoinOptions.length > 0 ? (
+                  sendCoinOptions.map((token) => (
+                    <option key={token.key} value={token.key}>
+                      {token.symbol}{token.balance ? ` - ${token.balance}` : ''}
+                    </option>
+                  ))
+                ) : (
+                  <option value="">Нет доступных монет</option>
+                )}
+              </select>
+              {selectedSendCoinBalance ? (
+                <span className="mt-1 block text-[11px] normal-case tracking-normal text-slate-500">
+                  Доступно: {selectedSendCoinBalance}
+                </span>
+              ) : null}
+            </label>
             <label className="block text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
               {messages.hero.sendRecipientLabel}
               <input
@@ -3517,7 +3546,7 @@ export function CockpitControlCards({ selectedNetwork, selectedNetworkLabel }: C
                 type="text"
                 inputMode="decimal"
                 className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900/80 px-4 py-2.5 text-sm text-white outline-none focus:border-sky-400/40"
-                placeholder={activeWalletIsSui ? '0.1' : '0.01'}
+                placeholder={selectedSendCoin ? `0.1 ${selectedSendCoin.symbol}` : '0.1'}
               />
             </label>
             {sendError ? (

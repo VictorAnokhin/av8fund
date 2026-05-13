@@ -5,7 +5,7 @@ import { normalizeSuiAddress } from '@mysten/sui/utils';
 const SUI_COIN = '0x2::sui::SUI';
 
 /**
- * Build a gasless programmable transaction (TransactionKind) for a native SUI transfer.
+ * Build a gasless programmable transaction (TransactionKind) for a Sui coin transfer.
  * Must not use `tx.gas` — required for Shinami / sponsored gas flows.
  */
 export async function buildGaslessSuiTransferTransactionKind(params: {
@@ -13,10 +13,12 @@ export async function buildGaslessSuiTransferTransactionKind(params: {
   sender: string;
   recipient: string;
   amountMist: bigint;
+  coinType?: string;
 }): Promise<Uint8Array> {
   const sender = normalizeSuiAddress(params.sender);
   const recipient = normalizeSuiAddress(params.recipient);
   const { client, amountMist } = params;
+  const coinType = String(params.coinType || SUI_COIN).trim() || SUI_COIN;
 
   if (amountMist <= 0n) {
     throw new Error('Transfer amount must be positive');
@@ -28,7 +30,7 @@ export async function buildGaslessSuiTransferTransactionKind(params: {
   for (;;) {
     const page = await client.getCoins({
       owner: sender,
-      coinType: SUI_COIN,
+      coinType,
       cursor: cursor ?? null,
       limit: 100,
     });
@@ -40,12 +42,12 @@ export async function buildGaslessSuiTransferTransactionKind(params: {
   }
 
   if (coinRefs.length === 0) {
-    throw new Error('No SUI coins for this address');
+    throw new Error('No coins of the selected type for this address');
   }
 
   const total = coinRefs.reduce((acc, c) => acc + BigInt(c.balance), 0n);
   if (total < amountMist) {
-    throw new Error('Insufficient SUI balance');
+    throw new Error('Insufficient selected coin balance');
   }
 
   const primary = coinRefs.reduce((a, b) => (BigInt(a.balance) >= BigInt(b.balance) ? a : b));

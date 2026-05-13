@@ -96,7 +96,7 @@ function getEthereumProvider(kind: 'metamask' | 'rabby'): Eip1193Provider | null
 
 type NavbarProps = {
   project: ProjectSettings;
-  currentPage?: 'home' | 'articles' | 'article' | 'swap' | 'mint' | 'invest' | 'portfolio' | 'fund-accounts' | 'fund-basket' | 'about' | 'whitepaper' | 'privacy-policy' | 'terms-of-service' | 'kyc-aml' | 'token-admin' | 'pool-admin';
+  currentPage?: 'home' | 'articles' | 'article' | 'swap' | 'mint' | 'invest' | 'portfolio' | 'fund-accounts' | 'fund-basket' | 'about' | 'whitepaper' | 'privacy-policy' | 'terms-of-service' | 'kyc-aml' | 'token-admin' | 'pool-admin' | 'admin-settings';
 };
 
 export function Navbar({ project, currentPage = 'home' }: NavbarProps) {

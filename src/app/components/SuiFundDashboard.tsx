@@ -21,6 +21,41 @@ type SuiFundDashboardProps = {
   hideAiLogPanel?: boolean;
 };
 
+export type SuiFundDepositPanelToken = {
+  symbol: string;
+  coinType: string;
+  whitelisted: boolean;
+  executable: boolean;
+};
+
+export type SuiFundDepositPanelProps = {
+  inv: ReturnType<typeof useI18n>['messages']['invest'];
+  depositToken: SuiFundDepositPanelToken;
+  depositTokenOptions: SuiFundDepositPanelToken[];
+  onSelectToken: (coinType: string) => void;
+  amount: string;
+  onAmountChange: (value: string) => void;
+  formatDepositTokenBalance: (token: SuiFundDepositPanelToken) => string;
+  balancesLoading: boolean;
+  walletBalanceLabel: string;
+  expectedAv8Label: string;
+  actionBusy: boolean;
+  actionError: string | null;
+  lastDigest: string | null;
+  hasWalletConnection: boolean;
+  canSign?: boolean;
+  walletLabel: string;
+  walletName: string;
+  onSubmit: () => void;
+  buttonLabel?: string;
+  signingLabel?: string;
+  asideBlurb?: string;
+  depositPathLabel?: string;
+  notice?: string | null;
+  compact?: boolean;
+  walletAction?: React.ReactNode;
+};
+
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -167,6 +202,158 @@ export function AiFlightLogSection() {
   );
 }
 
+export function SuiFundDepositPanel({
+  inv,
+  depositToken,
+  depositTokenOptions,
+  onSelectToken,
+  amount,
+  onAmountChange,
+  formatDepositTokenBalance,
+  balancesLoading,
+  walletBalanceLabel,
+  expectedAv8Label,
+  actionBusy,
+  actionError,
+  lastDigest,
+  hasWalletConnection,
+  canSign = hasWalletConnection,
+  walletLabel,
+  walletName,
+  onSubmit,
+  buttonLabel,
+  signingLabel,
+  asideBlurb,
+  depositPathLabel,
+  notice,
+  compact = false,
+  walletAction,
+}: SuiFundDepositPanelProps) {
+  return (
+    <div className={compact ? 'grid gap-6' : 'grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]'}>
+      <div className="rounded-[2rem] border border-white/10 bg-white/[0.045] p-6 backdrop-blur-2xl">
+        <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <div className="text-sm uppercase tracking-[0.18em] text-slate-400">{inv.depositSectionKicker}</div>
+            <div className="mt-2 text-2xl font-semibold text-white">{inv.depositSectionTitle}</div>
+          </div>
+          <div className="rounded-full border border-teal-400/20 bg-teal-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-teal-200">
+            {depositToken.executable
+              ? inv.depositBadgeReady
+              : depositToken.whitelisted
+                ? inv.depositBadgeConfigured
+                : inv.depositBadgeWalletAsset}
+          </div>
+        </div>
+
+        <div className={compact ? 'grid gap-4' : 'grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'}>
+          <label className="block">
+            <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{inv.depositTokenInWalletLabel}</span>
+            <select
+              value={depositToken.coinType}
+              onChange={(event) => onSelectToken(event.target.value)}
+              className="h-12 w-full rounded-xl border border-white/[0.09] bg-slate-950/70 px-3 text-sm font-semibold text-slate-100 outline-none transition focus:border-teal-300/40"
+            >
+              {depositTokenOptions.map((token) => (
+                <option key={token.coinType} value={token.coinType}>
+                  {token.symbol} - {formatDepositTokenBalance(token)} -{' '}
+                  {token.whitelisted ? inv.depositTokenWhitelisted : inv.depositTokenNotWhitelisted}
+                </option>
+              ))}
+            </select>
+            <div className="mt-2 grid gap-1 text-xs">
+              <div className="font-semibold text-slate-400">
+                {inv.depositAvailablePrefix}: {formatDepositTokenBalance(depositToken)}
+              </div>
+              <div className="truncate font-mono text-[11px] text-slate-600" title={depositToken.coinType}>
+                {depositToken.coinType}
+              </div>
+            </div>
+          </label>
+
+          <label className="block">
+            <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{inv.depositAmountLabel}</span>
+            <input
+              value={amount}
+              onChange={(event) => onAmountChange(event.target.value)}
+              inputMode="decimal"
+              className="h-12 w-full rounded-xl border border-white/[0.09] bg-slate-950/70 px-3 text-sm text-slate-100 outline-none transition focus:border-teal-300/40"
+            />
+          </label>
+        </div>
+
+        <div className={compact ? 'mt-4 grid gap-3 text-sm' : 'mt-4 grid gap-3 text-sm md:grid-cols-3'}>
+          <div className="rounded-2xl border border-white/[0.08] bg-slate-950/50 p-3">
+            <div className="text-xs uppercase tracking-[0.16em] text-slate-500">{inv.depositWalletBalanceLabel}</div>
+            <div className="mt-1 font-semibold text-slate-100">{balancesLoading ? inv.depositLoading : walletBalanceLabel}</div>
+          </div>
+          <div className="rounded-2xl border border-white/[0.08] bg-slate-950/50 p-3">
+            <div className="text-xs uppercase tracking-[0.16em] text-slate-500">{inv.depositExpectedIssueLabel}</div>
+            <div className="mt-1 font-semibold text-slate-100">{expectedAv8Label}</div>
+          </div>
+          <div className="rounded-2xl border border-white/[0.08] bg-slate-950/50 p-3">
+            <div className="text-xs uppercase tracking-[0.16em] text-slate-500">{inv.depositPathLabel}</div>
+            <div className="mt-1 font-semibold text-slate-100">
+              {depositPathLabel || (depositToken.executable ? inv.depositPathSui : inv.depositPathOracle)}
+            </div>
+          </div>
+        </div>
+
+        {!depositToken.executable ? (
+          <div className="mt-4 rounded-2xl border border-amber-300/15 bg-amber-400/10 p-3 text-sm leading-6 text-amber-100">
+            {depositToken.whitelisted
+              ? investInterpolate(inv.depositNoticeWhitelistedLead, depositToken.symbol)
+              : investInterpolate(inv.depositNoticeNotWhitelistedLead, depositToken.symbol)}
+            <code className="mx-1 rounded bg-black/20 px-1.5 py-0.5">portfolio.deposit_asset&lt;T&gt;</code>
+            {inv.depositNoticeTrail}
+          </div>
+        ) : null}
+
+        {notice ? (
+          <div className="mt-4 rounded-2xl border border-emerald-300/15 bg-emerald-400/10 p-3 text-sm leading-6 text-emerald-100">
+            {notice}
+          </div>
+        ) : null}
+
+        {actionError ? (
+          <div className="mt-4 rounded-2xl border border-rose-300/15 bg-rose-400/10 p-3 text-sm leading-6 text-rose-100">
+            {actionError}
+          </div>
+        ) : null}
+
+        {lastDigest ? (
+          <div className="mt-4 break-all rounded-2xl border border-sky-300/15 bg-sky-400/10 p-3 font-mono text-xs text-sky-100">
+            tx: {lastDigest}
+          </div>
+        ) : null}
+
+        <button
+          type="button"
+          onClick={onSubmit}
+          disabled={actionBusy || !hasWalletConnection || !canSign || !depositToken.executable}
+          className="mt-5 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-teal-300 px-4 text-sm font-bold text-slate-950 transition hover:bg-teal-200 disabled:opacity-60"
+        >
+          <Coins className="h-4 w-4" />
+          {actionBusy ? signingLabel || inv.depositSigning : buttonLabel || investInterpolate(inv.depositButton, depositToken.symbol)}
+        </button>
+      </div>
+
+      <div className="rounded-[2rem] border border-white/10 bg-white/[0.035] p-6 backdrop-blur-2xl">
+        <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-white/10">
+          <Wallet className="h-5 w-5 text-teal-200" />
+        </div>
+        <div className="text-sm uppercase tracking-[0.18em] text-slate-400">{inv.depositConnectedWallet}</div>
+        <div className="mt-2 text-xl font-semibold text-white">{walletLabel}</div>
+        <div className="mt-1 text-sm text-slate-500">{walletName}</div>
+        <p className="mt-4 text-sm leading-6 text-slate-400">
+          {asideBlurb || inv.depositWalletAsideBlurb}
+        </p>
+        {walletAction}
+      </div>
+    </div>
+  );
+}
+
 export function SuiFundDashboard({
   asPage = false,
   omitIntro = false,
@@ -278,119 +465,26 @@ export function SuiFundDashboard({
         </div>
 
         {!hideDepositPanel ? (
-        <div className="mt-10 grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
-          <div className="rounded-[2rem] border border-white/10 bg-white/[0.045] p-6 backdrop-blur-2xl">
-            <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <div className="text-sm uppercase tracking-[0.18em] text-slate-400">{inv.depositSectionKicker}</div>
-                <div className="mt-2 text-2xl font-semibold text-white">{inv.depositSectionTitle}</div>
-              </div>
-              <div className="rounded-full border border-teal-400/20 bg-teal-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-teal-200">
-                {depositToken.executable
-                  ? inv.depositBadgeReady
-                  : depositToken.whitelisted
-                    ? inv.depositBadgeConfigured
-                    : inv.depositBadgeWalletAsset}
-              </div>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-              <label className="block">
-                <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{inv.depositTokenInWalletLabel}</span>
-                <select
-                  value={depositToken.coinType}
-                  onChange={(event) => setDepositTokenSymbol(event.target.value)}
-                  className="h-12 w-full rounded-xl border border-white/[0.09] bg-slate-950/70 px-3 text-sm font-semibold text-slate-100 outline-none transition focus:border-teal-300/40"
-                >
-                  {depositTokenOptions.map((token) => (
-                    <option key={token.coinType} value={token.coinType}>
-                      {token.symbol} - {formatDepositTokenBalance(token)} -{' '}
-                      {token.whitelisted ? inv.depositTokenWhitelisted : inv.depositTokenNotWhitelisted}
-                    </option>
-                  ))}
-                </select>
-                <div className="mt-2 grid gap-1 text-xs">
-                  <div className="font-semibold text-slate-400">
-                    {inv.depositAvailablePrefix}: {formatDepositTokenBalance(depositToken)}
-                  </div>
-                  <div className="truncate font-mono text-[11px] text-slate-600" title={depositToken.coinType}>
-                    {depositToken.coinType}
-                  </div>
-                </div>
-              </label>
-
-              <label className="block">
-                <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{inv.depositAmountLabel}</span>
-                <input
-                  value={investAmount}
-                  onChange={(event) => setInvestAmount(event.target.value)}
-                  inputMode="decimal"
-                  className="h-12 w-full rounded-xl border border-white/[0.09] bg-slate-950/70 px-3 text-sm text-slate-100 outline-none transition focus:border-teal-300/40"
-                />
-              </label>
-            </div>
-
-            <div className="mt-4 grid gap-3 text-sm md:grid-cols-3">
-              <div className="rounded-2xl border border-white/[0.08] bg-slate-950/50 p-3">
-                <div className="text-xs uppercase tracking-[0.16em] text-slate-500">{inv.depositWalletBalanceLabel}</div>
-                <div className="mt-1 font-semibold text-slate-100">{balancesLoading ? inv.depositLoading : investBalanceLabel}</div>
-              </div>
-              <div className="rounded-2xl border border-white/[0.08] bg-slate-950/50 p-3">
-                <div className="text-xs uppercase tracking-[0.16em] text-slate-500">{inv.depositExpectedIssueLabel}</div>
-                <div className="mt-1 font-semibold text-slate-100">{expectedAv8Label}</div>
-              </div>
-              <div className="rounded-2xl border border-white/[0.08] bg-slate-950/50 p-3">
-                <div className="text-xs uppercase tracking-[0.16em] text-slate-500">{inv.depositPathLabel}</div>
-                <div className="mt-1 font-semibold text-slate-100">
-                  {depositToken.executable ? inv.depositPathSui : inv.depositPathOracle}
-                </div>
-              </div>
-            </div>
-
-            {!depositToken.executable ? (
-              <div className="mt-4 rounded-2xl border border-amber-300/15 bg-amber-400/10 p-3 text-sm leading-6 text-amber-100">
-                {depositToken.whitelisted
-                  ? investInterpolate(inv.depositNoticeWhitelistedLead, depositToken.symbol)
-                  : investInterpolate(inv.depositNoticeNotWhitelistedLead, depositToken.symbol)}
-                <code className="mx-1 rounded bg-black/20 px-1.5 py-0.5">portfolio.deposit_asset&lt;T&gt;</code>
-                {inv.depositNoticeTrail}
-              </div>
-            ) : null}
-
-            {actionState.error ? (
-              <div className="mt-4 rounded-2xl border border-rose-300/15 bg-rose-400/10 p-3 text-sm leading-6 text-rose-100">
-                {actionState.error}
-              </div>
-            ) : null}
-
-            {actionState.lastDigest ? (
-              <div className="mt-4 break-all rounded-2xl border border-sky-300/15 bg-sky-400/10 p-3 font-mono text-xs text-sky-100">
-                tx: {actionState.lastDigest}
-              </div>
-            ) : null}
-
-            <button
-              type="button"
-              onClick={() => void executeInvest()}
-              disabled={actionState.busy || !hasWalletConnection || !depositToken.executable}
-              className="mt-5 inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-teal-300 px-4 text-sm font-bold text-slate-950 transition hover:bg-teal-200 disabled:opacity-60"
-            >
-              <Coins className="h-4 w-4" />
-              {actionState.busy ? inv.depositSigning : investInterpolate(inv.depositButton, depositToken.symbol)}
-            </button>
-          </div>
-
-          <div className="rounded-[2rem] border border-white/10 bg-white/[0.035] p-6 backdrop-blur-2xl">
-            <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl bg-white/10">
-              <Wallet className="h-5 w-5 text-teal-200" />
-            </div>
-            <div className="text-sm uppercase tracking-[0.18em] text-slate-400">{inv.depositConnectedWallet}</div>
-            <div className="mt-2 text-xl font-semibold text-white">{walletLabel}</div>
-            <div className="mt-1 text-sm text-slate-500">{walletName}</div>
-            <p className="mt-4 text-sm leading-6 text-slate-400">
-              {inv.depositWalletAsideBlurb}
-            </p>
-          </div>
+        <div className="mt-10">
+          <SuiFundDepositPanel
+            inv={inv}
+            depositToken={depositToken}
+            depositTokenOptions={depositTokenOptions}
+            onSelectToken={setDepositTokenSymbol}
+            amount={investAmount}
+            onAmountChange={setInvestAmount}
+            formatDepositTokenBalance={formatDepositTokenBalance}
+            balancesLoading={balancesLoading}
+            walletBalanceLabel={investBalanceLabel}
+            expectedAv8Label={expectedAv8Label}
+            actionBusy={actionState.busy}
+            actionError={actionState.error}
+            lastDigest={actionState.lastDigest}
+            hasWalletConnection={hasWalletConnection}
+            walletLabel={walletLabel}
+            walletName={walletName}
+            onSubmit={() => void executeInvest()}
+          />
         </div>
         ) : null}
 

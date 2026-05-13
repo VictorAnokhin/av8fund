@@ -2,11 +2,11 @@ import React from 'react';
 import { Shield, Twitter, Linkedin, Github } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { type ProjectSettings } from '../lib/api';
-import { getAboutPath, getArticlesPath, getBasePath, getFundAccountsPath, getFundBasketPath, getInvestPath, getKycAmlPath, getMintPath, getPoolsPath, getPortfolioPath, getPrivacyPolicyPath, getSwapPath, getTermsOfServicePath, getTokensPath, getWhitepaperPath } from '../lib/routes';
+import { getAboutPath, getArticlesPath, getBasePath, getFundAccountsPath, getFundBasketPath, getInvestPath, getKycAmlPath, getMintPath, getPoolsPath, getPortfolioPath, getPrivacyPolicyPath, getSettingsPath, getSwapPath, getTermsOfServicePath, getTokensPath, getWhitepaperPath } from '../lib/routes';
 
 type FooterProps = {
   project: ProjectSettings;
-  currentPage?: 'home' | 'articles' | 'article' | 'swap' | 'mint' | 'invest' | 'portfolio' | 'fund-accounts' | 'fund-basket' | 'about' | 'whitepaper' | 'privacy-policy' | 'terms-of-service' | 'kyc-aml' | 'token-admin' | 'pool-admin';
+  currentPage?: 'home' | 'articles' | 'article' | 'swap' | 'mint' | 'invest' | 'portfolio' | 'fund-accounts' | 'fund-basket' | 'about' | 'whitepaper' | 'privacy-policy' | 'terms-of-service' | 'kyc-aml' | 'token-admin' | 'pool-admin' | 'admin-settings';
 };
 
 export function Footer({ project, currentPage = 'home' }: FooterProps) {
@@ -29,6 +29,7 @@ export function Footer({ project, currentPage = 'home' }: FooterProps) {
   const whitepaperHref = getWhitepaperPath();
   const tokensHref = getTokensPath();
   const poolsHref = getPoolsPath();
+  const settingsHref = getSettingsPath();
   const homeSectionHref = (section: string) => (currentPage === 'home' ? section : `${basePath}${section}`);
   const { messages } = useI18n();
   const shouldShowLogo = Boolean(logoUrl) && !logoError;
@@ -142,6 +143,9 @@ export function Footer({ project, currentPage = 'home' }: FooterProps) {
           </a>
           <a href={poolsHref} className="block text-sm tracking-wide text-slate-500 transition-colors duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:text-teal-100/95">
             Пулы
+          </a>
+          <a href={settingsHref} className="block text-sm tracking-wide text-slate-500 transition-colors duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:text-teal-100/95">
+            Настройки
           </a>
           <a href={mintHref} className="block text-sm tracking-wide text-slate-500 transition-colors duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:text-teal-100/95">
             {messages.footer.rwaMint}

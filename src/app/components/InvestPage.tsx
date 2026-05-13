@@ -1,13 +1,28 @@
 import React from 'react';
 import { ConnectButton, useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from '@mysten/dapp-kit';
+import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { Transaction } from '@mysten/sui/transactions';
+import { getZkLoginSignature } from '@mysten/sui/zklogin';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { ArrowLeft, ArrowRight, ArrowRightLeft, BadgeDollarSign, CircleDollarSign, Plus, RefreshCw, Wallet } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Info, MoreVertical, RefreshCw, Star } from 'lucide-react';
 
 import { SUI_NETWORK } from '../config';
-import { getFundPoolEvents, getFundPools, type FundPoolChartPoint, type FundPoolEventRecord, type FundPoolRecord } from '../lib/api';
+import {
+  getFundPoolEvents,
+  getFundPools,
+  getFundShareSettings,
+  type FundPoolChartPoint,
+  type FundPoolEventRecord,
+  type FundPoolRecord,
+  type FundShareSettingsRecord,
+} from '../lib/api';
+import { EXTERNAL_WALLET_SESSION_EVENT, getExternalSessionAddress, isExternalSessionSui, readExternalWalletSession } from '../lib/externalWalletSession';
 import { getBasePath } from '../lib/routes';
 import { SUI_FUND_CONFIG } from '../lib/suiFund';
+import { normalizeSwapWalletAddress, resolveSuiSigningRoute } from '../lib/swapLinkedWallets';
+import { normalizeZkLoginSessionProofForSigning } from '../lib/zkloginProof';
+import { readZkLoginSession, ZKLOGIN_SESSION_EVENT } from '../lib/zkloginSession';
+import { useSwapLinkedWallets } from '../hooks/useSwapLinkedWallets';
 import { useI18n } from '../i18n';
 import { PageBreadcrumbsBar, PageHeroBadge, PageHeroShell } from './PageChrome';
 
@@ -23,14 +38,30 @@ type CoinLike = {
 type LivePool = FundPoolRecord & {
   liveBalance: bigint | null;
   liveShares: bigint | null;
+  liveMinDepositUsdc: bigint | null;
+};
+
+type PoolWithdrawRequestRecord = {
+  objectId: string;
+  poolId: string;
+  amountUsdc: bigint;
+  burnedAv8: bigint;
+  feeAv8: bigint;
+  availableAtMs: bigint;
 };
 
 const CLOCK_OBJECT_ID = '0x6';
-const FUND_POSITION_TYPE = `${SUI_FUND_CONFIG.packageId}::fund_core::FundPosition`;
-const AV8_DECIMALS = 6;
+const FUND_TYPE_PACKAGE_ID = SUI_FUND_CONFIG.packageId;
+const FUND_MODULE_PACKAGE_ID = SUI_FUND_CONFIG.modulePackageId || SUI_FUND_CONFIG.packageId;
+const FUND_POSITION_TYPE = `${FUND_TYPE_PACKAGE_ID}::fund_core::FundPosition`;
+const POOL_WITHDRAW_REQUEST_TYPE = `${FUND_TYPE_PACKAGE_ID}::fund_core::PoolWithdrawRequest`;
+const SHARE_TYPE = `${FUND_TYPE_PACKAGE_ID}::fund_share::FUND_SHARE`;
+const AV8_DECIMALS = 9;
+const DEFAULT_NAV_PRICE_USDC = 1_000_000n;
+const REDEEM_DELAY_DAYS = 3;
 
-const inputClass =
-  'h-11 w-full rounded-xl border border-white/[0.09] bg-white/[0.04] px-3 text-sm text-slate-100 outline-none transition focus:border-teal-300/40 focus:bg-white/[0.07]';
+const ACTIVE_WALLET_KEY = 'av8fund.active-wallet';
+const ACTIVE_WALLET_EVENT = 'av8fund:active-wallet';
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
@@ -53,12 +84,60 @@ function readBigInt(value: unknown): bigint {
   return 0n;
 }
 
+function readObjectId(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  const record = asRecord(value);
+  const direct = record.id ?? record.bytes ?? record.objectId;
+  if (typeof direct === 'string') {
+    return direct;
+  }
+  const fields = asRecord(record.fields);
+  const nested = fields.id ?? fields.bytes ?? fields.value;
+  return typeof nested === 'string' ? nested : '';
+}
+
 function shortId(value: string): string {
   return value.length > 18 ? `${value.slice(0, 10)}...${value.slice(-6)}` : value;
 }
 
+function sameSuiAddress(a?: string | null, b?: string | null): boolean {
+  const left = String(a || '').trim().toLowerCase();
+  const right = String(b || '').trim().toLowerCase();
+  return Boolean(left && right && left === right);
+}
+
+function readActiveSuiWalletAddress(): string {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  try {
+    const raw = window.localStorage.getItem(ACTIVE_WALLET_KEY);
+    if (!raw) {
+      return '';
+    }
+
+    const payload = JSON.parse(raw) as { address?: unknown; isSui?: unknown; network?: unknown };
+    const address = typeof payload.address === 'string' ? payload.address.trim() : '';
+    const network = typeof payload.network === 'string' ? payload.network.trim().toLowerCase() : '';
+    if (!address || (payload.isSui !== true && network !== 'sui')) {
+      return '';
+    }
+
+    return address;
+  } catch {
+    return '';
+  }
+}
+
 function formatBps(value: number): string {
   return `${(Number(value || 0) / 100).toFixed(2)}%`;
+}
+
+function applyBps(value: bigint, bps: number): bigint {
+  return value * BigInt(Math.max(0, Math.min(10000, Math.trunc(Number(bps || 0))))) / 10000n;
 }
 
 function parseDecimalAmount(value: string, decimals: number): bigint | null {
@@ -86,6 +165,57 @@ function formatUnits(value: bigint, decimals: number, maxFraction = 2): string {
   return `${sign}${whole.toString()}${fractionText ? `.${fractionText}` : ''}`;
 }
 
+function readUsdcAmount(value: string | null | undefined): bigint {
+  return BigInt(/^\d+$/.test(String(value || '')) ? String(value) : '0');
+}
+
+function bigintToUnits(value: bigint, decimals: number): number {
+  const sign = value < 0n ? -1 : 1;
+  const abs = value < 0n ? -value : value;
+  const base = 10n ** BigInt(decimals);
+  const whole = Number(abs / base);
+  const fraction = Number(abs % base) / Number(base);
+  return sign * (whole + fraction);
+}
+
+function formatCompactUsdFromUsdc(value: bigint | null | undefined): string {
+  if (value === null || value === undefined) {
+    return 'N/A';
+  }
+
+  const amount = bigintToUnits(value, 6);
+  const abs = Math.abs(amount);
+  const suffix = abs >= 1_000_000_000 ? 'b' : abs >= 1_000_000 ? 'm' : abs >= 1_000 ? 'k' : '';
+  const divisor = suffix === 'b' ? 1_000_000_000 : suffix === 'm' ? 1_000_000 : suffix === 'k' ? 1_000 : 1;
+  const compact = amount / divisor;
+
+  return `$${new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: suffix ? 2 : 0,
+  }).format(compact)}${suffix}`;
+}
+
+function buildSnapshotPoints(seedInput: string, trend: number | null | undefined): string {
+  const seed = Array.from(seedInput).reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  const positiveTrend = Number.isFinite(trend) ? Number(trend) >= 0 : true;
+  const points = Array.from({ length: 28 }, (_, index) => {
+    const wave = Math.sin((index + seed) * 0.55) * 4;
+    const jitter = ((seed + index * 17) % 9) - 4;
+    const drift = positiveTrend ? index * 0.9 : -index * 0.55;
+    const y = 34 - drift - wave - jitter;
+    return {
+      x: index * 5,
+      y: Math.max(7, Math.min(45, y)),
+    };
+  });
+
+  return points.map((point) => `${point.x},${point.y}`).join(' ');
+}
+
+function getPoolSparkId(pool: LivePool): string {
+  return `invest-pool-spark-${String(pool.pool_object_id || pool.id).replace(/[^a-zA-Z0-9]/g, '')}`;
+}
+
 function getInvestRoot(): string {
   const root = getBasePath();
   return root === '/' ? '/invest' : `${root.replace(/\/+$/, '')}/invest`;
@@ -93,6 +223,10 @@ function getInvestRoot(): string {
 
 function getPoolHref(pool: FundPoolRecord): string {
   return `${getInvestRoot()}/${encodeURIComponent(pool.pool_object_id || String(pool.id))}`;
+}
+
+function getPoolAccountingId(pool?: FundPoolRecord | null): string {
+  return pool?.pool_accounting_id || SUI_FUND_CONFIG.poolAccountingId || '';
 }
 
 function buildPoolChartData(pool: LivePool) {
@@ -153,12 +287,177 @@ async function findFundPosition(client: ReturnType<typeof useSuiClient>, owner: 
   return '';
 }
 
-function readPoolLiveFields(objectData: unknown): Pick<LivePool, 'liveBalance' | 'liveShares'> {
+async function fetchPoolWithdrawRequests(client: ReturnType<typeof useSuiClient>, owner: string): Promise<PoolWithdrawRequestRecord[]> {
+  const requests: PoolWithdrawRequestRecord[] = [];
+  let cursor: string | null | undefined = null;
+
+  do {
+    const page = await client.getOwnedObjects({
+      owner,
+      cursor,
+      limit: 50,
+      filter: { StructType: POOL_WITHDRAW_REQUEST_TYPE },
+      options: { showContent: true, showType: true },
+    });
+
+    for (const item of page.data) {
+      const objectId = item.data?.objectId || '';
+      const fields = asRecord(asRecord(asRecord(item.data).content).fields);
+      if (!objectId) {
+        continue;
+      }
+      requests.push({
+        objectId,
+        poolId: readObjectId(fields.pool_id),
+        amountUsdc: readBigInt(fields.amount_usdc),
+        burnedAv8: readBigInt(fields.burned_av8),
+        feeAv8: readBigInt(fields.fee_av8),
+        availableAtMs: readBigInt(fields.available_at_ms),
+      });
+    }
+
+    cursor = page.hasNextPage ? page.nextCursor : null;
+  } while (cursor);
+
+  return requests.sort((a, b) => Number(a.availableAtMs - b.availableAtMs));
+}
+
+function readPoolLiveFields(objectData: unknown): Pick<LivePool, 'liveBalance' | 'liveShares' | 'liveMinDepositUsdc'> {
   const fields = asRecord(asRecord(asRecord(objectData).content).fields);
   return {
     liveBalance: fields.balance ? readBigInt(fields.balance) : null,
     liveShares: fields.total_pool_shares ? readBigInt(fields.total_pool_shares) : null,
+    liveMinDepositUsdc: fields.min_deposit_usdc ? readBigInt(fields.min_deposit_usdc) : null,
   };
+}
+
+function readNavPriceUsdc(objectData: unknown): bigint {
+  const fields = asRecord(asRecord(asRecord(objectData).content).fields);
+  const value = readBigInt(fields.nav_price_usdc);
+  return value > 0n ? value : DEFAULT_NAV_PRICE_USDC;
+}
+
+function formatDateTime(value: number): string {
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value));
+}
+
+function InvestPoolsTable({ pools }: { pools: LivePool[] }) {
+  return (
+    <div className="overflow-x-auto rounded-[1.25rem] border border-white/[0.07] bg-[rgba(4,8,16,0.34)]">
+      <div className="min-w-[980px]">
+        <div className="grid grid-cols-[2.1fr_1.25fr_1.15fr_1fr_1.45fr_1.55fr_130px] gap-4 px-5 py-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+          <div>Pool</div>
+          <div className="flex items-center gap-1">TVL (Supply) <Info className="h-3.5 w-3.5" /></div>
+          <div className="flex items-center gap-1">Balance <Info className="h-3.5 w-3.5" /></div>
+          <div className="flex items-center gap-1">Fee APY <Info className="h-3.5 w-3.5" /></div>
+          <div className="flex items-center gap-1">Annualized performance <Info className="h-3.5 w-3.5" /></div>
+          <div className="flex items-center gap-1">Snapshot <Info className="h-3.5 w-3.5" /></div>
+          <div />
+        </div>
+
+        <div className="space-y-2 pb-2">
+          {pools.map((pool) => {
+            const apyBps = Number(pool.realized_apy_bps || pool.target_apy_bps || 0);
+            const performanceBps = Math.round(apyBps * 0.92);
+            const minDeposit = pool.liveMinDepositUsdc ?? readUsdcAmount(pool.min_deposit_usdc);
+            const snapshotPoints = buildSnapshotPoints(pool.pool_object_id || String(pool.id), performanceBps);
+            const sparkId = getPoolSparkId(pool);
+
+            return (
+              <div
+                key={pool.pool_object_id || pool.id}
+                className="grid min-h-[94px] grid-cols-[2.1fr_1.25fr_1.15fr_1fr_1.45fr_1.55fr_130px] items-center gap-4 rounded-2xl bg-[rgba(13,17,32,0.96)] px-5 py-4 text-slate-200 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.035)]"
+              >
+                <div className="flex min-w-0 items-center gap-4">
+                  <button
+                    type="button"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-500 transition hover:bg-white/[0.04] hover:text-slate-200"
+                    aria-label="Watch pool"
+                  >
+                    <Star className="h-5 w-5" />
+                  </button>
+
+                  {pool.logo_url ? (
+                    <div className="h-16 w-16 shrink-0 overflow-hidden rounded-full bg-white/5 ring-1 ring-white/10">
+                      <img src={pool.logo_url} alt={pool.name} className="h-full w-full object-cover" />
+                    </div>
+                  ) : (
+                    <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-sky-400 to-cyan-300 text-lg font-black text-slate-950 ring-1 ring-white/10">
+                      {(pool.symbol || 'AV8').slice(0, 3).toUpperCase()}
+                    </div>
+                  )}
+
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <div className="truncate text-xl font-semibold text-white">{pool.name}</div>
+                      <MoreVertical className="h-4 w-4 shrink-0 text-slate-500" />
+                    </div>
+                    <div className="mt-1 truncate text-sm text-slate-500">[{pool.symbol || 'USDC'}-AV8]</div>
+                  </div>
+                </div>
+
+                <div className="min-w-0">
+                  <div className="text-lg font-medium text-white">{formatCompactUsdFromUsdc(pool.liveBalance)}</div>
+                  <div className="mt-1 text-sm text-slate-500">USDC liquidity</div>
+                </div>
+
+                <div className="min-w-0">
+                  <div className="text-lg font-medium text-white">{formatUnits(minDeposit, 6, 6)} {pool.symbol || 'USDC'}</div>
+                  <div className="mt-1 text-sm text-slate-500 underline decoration-dotted underline-offset-4">
+                    Min deposit
+                  </div>
+                </div>
+
+                <div className="text-lg font-medium text-white">{formatBps(apyBps)}</div>
+                <div className="text-lg font-medium text-white">{formatBps(performanceBps)}</div>
+
+                <div className="h-14">
+                  <svg viewBox="0 0 135 54" className="h-full w-full overflow-visible" role="img" aria-label="Pool performance snapshot">
+                    <defs>
+                      <linearGradient id={sparkId} x1="0" x2="0" y1="0" y2="1">
+                        <stop offset="0%" stopColor="rgba(74,222,128,0.42)" />
+                        <stop offset="100%" stopColor="rgba(74,222,128,0)" />
+                      </linearGradient>
+                    </defs>
+                    <polyline
+                      points={`0,54 ${snapshotPoints} 135,54`}
+                      fill={`url(#${sparkId})`}
+                      stroke="none"
+                    />
+                    <polyline
+                      points={snapshotPoints}
+                      fill="none"
+                      stroke="#4ade80"
+                      strokeWidth="2.2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </div>
+
+                <div className="flex items-center justify-end gap-3">
+                  <a
+                    href={getPoolHref(pool)}
+                    className="inline-flex items-center gap-2 text-base font-medium text-slate-300 transition hover:text-white"
+                  >
+                    Details
+                    <ExternalLink className="h-4 w-4" />
+                  </a>
+                  <MoreVertical className="h-5 w-5 text-slate-600" />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function InvestPage({ poolObjectId }: InvestPageProps) {
@@ -166,21 +465,59 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
   const client = useSuiClient();
   const account = useCurrentAccount();
   const { mutateAsync: signAndExecuteTransaction } = useSignAndExecuteTransaction();
+  const {
+    suiLinked,
+    selectedSuiAddress,
+    setSelectedSuiAddress,
+    lookupError: linkedWalletsError,
+    hasGoogleIdentity,
+  } = useSwapLinkedWallets();
   const investRoot = getInvestRoot();
 
+  const [activeSuiWalletAddress, setActiveSuiWalletAddress] = React.useState(() => readActiveSuiWalletAddress());
+  const [externalWalletAddress, setExternalWalletAddress] = React.useState('');
+  const [zkLoginWalletAddress, setZkLoginWalletAddress] = React.useState(() => readZkLoginSession()?.walletAddress || '');
   const [pools, setPools] = React.useState<LivePool[]>([]);
-  const [amount, setAmount] = React.useState('1000');
+  const [amount, setAmount] = React.useState('');
+  const [amountEdited, setAmountEdited] = React.useState(false);
+  const [formMode, setFormMode] = React.useState<'deposit' | 'withdraw'>('deposit');
   const [balance, setBalance] = React.useState<bigint>(0n);
+  const [av8Balance, setAv8Balance] = React.useState<bigint>(0n);
+  const [navPriceUsdc, setNavPriceUsdc] = React.useState<bigint>(DEFAULT_NAV_PRICE_USDC);
   const [positionId, setPositionId] = React.useState('');
   const [loading, setLoading] = React.useState(false);
   const [busy, setBusy] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
   const [lastDigest, setLastDigest] = React.useState<string | null>(null);
+  const [lastDepositAmountLabel, setLastDepositAmountLabel] = React.useState<string | null>(null);
   const [poolEvents, setPoolEvents] = React.useState<FundPoolEventRecord[]>([]);
   const [poolChart, setPoolChart] = React.useState<FundPoolChartPoint[]>([]);
+  const [shareSettings, setShareSettings] = React.useState<FundShareSettingsRecord | null>(null);
+  const [quickPoolObjectId, setQuickPoolObjectId] = React.useState('');
+  const [quickMode, setQuickMode] = React.useState<'deposit' | 'redeem'>('deposit');
+  const [quickAmount, setQuickAmount] = React.useState('');
+  const [redeemRequests, setRedeemRequests] = React.useState<Array<{ id: string; amountAv8: string; expectedUsdc: string; availableAt: number }>>([]);
+  const [onChainRedeemRequests, setOnChainRedeemRequests] = React.useState<PoolWithdrawRequestRecord[]>([]);
+  const selectedLinkedWallet = React.useMemo(() => {
+    const normalizedSelected = normalizeSwapWalletAddress(selectedSuiAddress);
+    return suiLinked.find((wallet) => normalizeSwapWalletAddress(wallet.address) === normalizedSelected) || null;
+  }, [selectedSuiAddress, suiLinked]);
+  const currentOwnerAddress = selectedSuiAddress || account?.address || zkLoginWalletAddress || externalWalletAddress || activeSuiWalletAddress;
+  const signingRoute = React.useMemo(() => {
+    const active = normalizeSwapWalletAddress(currentOwnerAddress);
+    return resolveSuiSigningRoute({
+      activeWalletIsSui: Boolean(active),
+      web3auth: selectedLinkedWallet?.web3auth,
+      extensionAddressMatchesActive: Boolean(account?.address && normalizeSwapWalletAddress(account.address) === active),
+      zkSessionMatchesActive: Boolean(zkLoginWalletAddress && normalizeSwapWalletAddress(zkLoginWalletAddress) === active),
+    });
+  }, [account?.address, currentOwnerAddress, selectedLinkedWallet?.web3auth, zkLoginWalletAddress]);
 
   const activePools = React.useMemo(() => pools.filter((pool) => pool.active), [pools]);
+  const quickPool = React.useMemo(() => {
+    return activePools.find((pool) => pool.pool_object_id === quickPoolObjectId) || activePools[0] || null;
+  }, [activePools, quickPoolObjectId]);
   const routePool = React.useMemo(() => {
     const normalized = String(poolObjectId || '').trim().toLowerCase();
     if (!normalized) {
@@ -190,8 +527,11 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
   }, [activePools, poolObjectId]);
   const selectedPools = routePool ? [routePool] : [];
   const depositCoinType = routePool?.coin_type || SUI_FUND_CONFIG.usdcType || activePools[0]?.coin_type || '';
+  const minDepositAmount = routePool ? routePool.liveMinDepositUsdc ?? BigInt(routePool.min_deposit_usdc || '0') : 0n;
   const parsedAmount = parseDecimalAmount(amount, 6);
-  const expectedAv8 = parsedAmount && parsedAmount > 0n ? parsedAmount : 0n;
+  const parsedAv8Amount = parseDecimalAmount(amount, AV8_DECIMALS);
+  const expectedAv8 = parsedAmount && parsedAmount > 0n ? parsedAmount * 10n ** BigInt(AV8_DECIMALS) / navPriceUsdc : 0n;
+  const expectedUsdc = parsedAv8Amount && parsedAv8Amount > 0n ? parsedAv8Amount * navPriceUsdc / 10n ** BigInt(AV8_DECIMALS) : 0n;
   const poolChartData = React.useMemo(() => {
     if (poolChart.length > 0) {
       return poolChart.map((point) => ({
@@ -204,6 +544,63 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
     return routePool ? buildPoolChartData(routePool) : [];
   }, [poolChart, routePool]);
 
+  React.useEffect(() => {
+    setAmountEdited(false);
+    setLastDepositAmountLabel(null);
+  }, [routePool?.pool_object_id]);
+
+  React.useEffect(() => {
+    if (formMode !== 'deposit' || amountEdited || minDepositAmount <= 0n) {
+      return;
+    }
+
+    setAmount(formatUnits(minDepositAmount, 6, 6));
+  }, [amountEdited, formMode, minDepositAmount]);
+
+  React.useEffect(() => {
+    function syncActiveWallet() {
+      setActiveSuiWalletAddress(readActiveSuiWalletAddress());
+    }
+
+    syncActiveWallet();
+
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.addEventListener(ACTIVE_WALLET_EVENT, syncActiveWallet as EventListener);
+    window.addEventListener('storage', syncActiveWallet);
+
+    return () => {
+      window.removeEventListener(ACTIVE_WALLET_EVENT, syncActiveWallet as EventListener);
+      window.removeEventListener('storage', syncActiveWallet);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    function syncExternalSession() {
+      const session = readExternalWalletSession();
+      setExternalWalletAddress(isExternalSessionSui(session) ? String(getExternalSessionAddress(session) || '') : '');
+      setZkLoginWalletAddress(readZkLoginSession()?.walletAddress || '');
+    }
+
+    syncExternalSession();
+
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.addEventListener(EXTERNAL_WALLET_SESSION_EVENT, syncExternalSession as EventListener);
+    window.addEventListener(ZKLOGIN_SESSION_EVENT, syncExternalSession as EventListener);
+    window.addEventListener('storage', syncExternalSession);
+
+    return () => {
+      window.removeEventListener(EXTERNAL_WALLET_SESSION_EVENT, syncExternalSession as EventListener);
+      window.removeEventListener(ZKLOGIN_SESSION_EVENT, syncExternalSession as EventListener);
+      window.removeEventListener('storage', syncExternalSession);
+    };
+  }, []);
+
   async function load() {
     setLoading(true);
     setError(null);
@@ -215,26 +612,40 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
       });
       const withLive = await Promise.all(records.map(async (pool): Promise<LivePool> => {
         if (!pool.pool_object_id) {
-          return { ...pool, liveBalance: null, liveShares: null };
+          return { ...pool, liveBalance: null, liveShares: null, liveMinDepositUsdc: null };
         }
         try {
           const object = await client.getObject({ id: pool.pool_object_id, options: { showContent: true } });
           return { ...pool, ...readPoolLiveFields(object.data) };
         } catch {
-          return { ...pool, liveBalance: null, liveShares: null };
+          return { ...pool, liveBalance: null, liveShares: null, liveMinDepositUsdc: null };
         }
       }));
       setPools(withLive);
-      if (account?.address) {
-        const [coins, position] = await Promise.all([
-          depositCoinType ? fetchAllCoins(client, account.address, depositCoinType) : Promise.resolve([]),
-          findFundPosition(client, account.address),
+      if (SUI_FUND_CONFIG.navStateId) {
+        try {
+          const navObject = await client.getObject({ id: SUI_FUND_CONFIG.navStateId, options: { showContent: true } });
+          setNavPriceUsdc(readNavPriceUsdc(navObject.data));
+        } catch {
+          setNavPriceUsdc(DEFAULT_NAV_PRICE_USDC);
+        }
+      }
+      if (currentOwnerAddress) {
+        const [coins, shareCoins, position, withdrawRequests] = await Promise.all([
+          depositCoinType ? fetchAllCoins(client, currentOwnerAddress, depositCoinType) : Promise.resolve([]),
+          fetchAllCoins(client, currentOwnerAddress, SHARE_TYPE).catch(() => []),
+          findFundPosition(client, currentOwnerAddress),
+          fetchPoolWithdrawRequests(client, currentOwnerAddress).catch(() => []),
         ]);
         setBalance(coins.reduce((sum, coin) => sum + BigInt(coin.balance), 0n));
+        setAv8Balance(shareCoins.reduce((sum, coin) => sum + BigInt(coin.balance), 0n));
         setPositionId(position);
+        setOnChainRedeemRequests(withdrawRequests);
       } else {
         setBalance(0n);
+        setAv8Balance(0n);
         setPositionId('');
+        setOnChainRedeemRequests([]);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -245,7 +656,50 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
 
   React.useEffect(() => {
     void load();
-  }, [account?.address, depositCoinType]);
+  }, [currentOwnerAddress, depositCoinType]);
+
+  React.useEffect(() => {
+    if (!quickPoolObjectId && activePools[0]?.pool_object_id) {
+      setQuickPoolObjectId(activePools[0].pool_object_id);
+    }
+  }, [activePools, quickPoolObjectId]);
+
+  React.useEffect(() => {
+    let active = true;
+    getFundShareSettings({
+      network: SUI_NETWORK,
+      packageId: SUI_FUND_CONFIG.packageId,
+    })
+      .then((settings) => {
+        if (active) {
+          setShareSettings(settings);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setShareSettings(null);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined' || !currentOwnerAddress) {
+      setRedeemRequests([]);
+      return;
+    }
+
+    try {
+      const raw = window.localStorage.getItem(`av8fund.redeem-requests.${normalizeSwapWalletAddress(currentOwnerAddress)}`);
+      const parsed = raw ? JSON.parse(raw) : [];
+      setRedeemRequests(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      setRedeemRequests([]);
+    }
+  }, [currentOwnerAddress]);
 
   React.useEffect(() => {
     let active = true;
@@ -275,45 +729,186 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
     };
   }, [routePool?.pool_object_id]);
 
-  async function runTx(label: string, tx: Transaction) {
+  async function executeSignedTransaction(transaction: Transaction): Promise<string> {
+    if (selectedLinkedWallet?.web3auth === 0 && !signingRoute.useExtension) {
+      throw new Error('Выбранный кошелек требует подпись кошельком. Подключите этот Sui wallet.');
+    }
+    if (selectedLinkedWallet?.web3auth === 1 && !signingRoute.useZkLogin) {
+      throw new Error('Выбранный кошелек требует подпись zkLogin. Войдите через Google zkLogin для этого адреса.');
+    }
+
+    if (signingRoute.useExtension) {
+      const result = await signAndExecuteTransaction({ transaction });
+      if (typeof result === 'object' && result && 'digest' in result && typeof result.digest === 'string') {
+        return result.digest;
+      }
+
+      throw new Error('Connected wallet did not return a transaction digest.');
+    }
+
+    const zkSession = readZkLoginSession();
+    if (!signingRoute.useZkLogin || !sameSuiAddress(zkSession?.walletAddress, currentOwnerAddress)) {
+      if (account?.address && !sameSuiAddress(account.address, currentOwnerAddress)) {
+        throw new Error('Подключенный Sui кошелек не совпадает с выбранным активным адресом. Переключите кошелек или выберите подключенный адрес.');
+      }
+      throw new Error('Для выбранного адреса нет способа подписи. Подключите Sui кошелек или заново войдите через Google zkLogin.');
+    }
+
+    const signer = Ed25519Keypair.fromSecretKey(zkSession.ephemeralPrivateKey);
+    const { bytes, signature: userSignature } = await transaction.sign({
+      client,
+      signer,
+    });
+    const zkSignature = getZkLoginSignature({
+      inputs: normalizeZkLoginSessionProofForSigning(zkSession),
+      maxEpoch: zkSession.maxEpoch,
+      userSignature,
+    });
+    const result = await client.executeTransactionBlock({
+      transactionBlock: bytes,
+      signature: zkSignature,
+      options: {
+        showEffects: true,
+      },
+    });
+
+    if (!result.digest) {
+      throw new Error('zkLogin transaction finished without a digest.');
+    }
+
+    return result.digest;
+  }
+
+  async function runTx(label: string, tx: Transaction): Promise<boolean> {
     setBusy(label);
     setError(null);
     setNotice(null);
     setLastDigest(null);
+    setLastDepositAmountLabel(null);
     try {
-      const result = await signAndExecuteTransaction({ transaction: tx });
-      const digest = typeof result === 'object' && result && 'digest' in result ? String(result.digest) : '';
-      if (!digest) {
-        throw new Error('Transaction digest is missing.');
-      }
+      const digest = await executeSignedTransaction(tx);
       await client.waitForTransaction({ digest, options: { showEffects: true, showEvents: true } });
       setLastDigest(digest);
-      setNotice(label === 'position' ? 'Позиция фонда создана. Теперь можно внести средства в пул.' : 'Депозит отправлен в пул, AV8 начислен на кошелек.');
+      setNotice(
+        label === 'position'
+          ? 'Позиция фонда создана. Теперь можно внести средства в пул.'
+          : label === 'withdraw'
+            ? 'Заявка на вывод отправлена, USDC возвращен на кошелек.'
+            : label === 'withdraw-request'
+              ? `Заявка на выкуп создана on-chain. Claim USDC будет доступен после задержки ${REDEEM_DELAY_DAYS} дня.`
+              : label === 'withdraw-claim'
+                ? 'Заявка на выкуп исполнена, USDC отправлены на кошелек.'
+              : 'Депозит отправлен в пул, AV8 начислен на кошелек.',
+      );
       await load();
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      return false;
     } finally {
       setBusy(null);
     }
   }
 
   async function handleOpenPosition() {
-    if (!account?.address) {
-      setError('Подключите Sui кошелек.');
+    if (!currentOwnerAddress) {
+      setError('Подключите Sui кошелек или войдите через Google zkLogin.');
       return;
     }
     const tx = new Transaction();
-    tx.setSender(account.address);
+    tx.setSender(currentOwnerAddress);
     tx.moveCall({
-      target: `${SUI_FUND_CONFIG.packageId}::fund_core::open_position`,
+      target: `${FUND_MODULE_PACKAGE_ID}::fund_core::open_position`,
       arguments: [],
     });
     await runTx('position', tx);
   }
 
+  async function submitDeposit(targetPool: LivePool, amountUsdc: bigint, label: 'deposit' | 'quick-deposit' = 'deposit') {
+    if (!currentOwnerAddress) {
+      setError('Подключите Sui кошелек или войдите через Google zkLogin.');
+      return;
+    }
+    if (!positionId) {
+      setError('Сначала создайте FundPosition для этого кошелька.');
+      return;
+    }
+    if (!targetPool.coin_type || !SUI_FUND_CONFIG.navStateId || !SUI_FUND_CONFIG.shareConfigId) {
+      setError('Не настроены VITE_SUI_USDC_TYPE / NavState / ShareConfig.');
+      return;
+    }
+    if (!amountUsdc || amountUsdc <= 0n) {
+      setError('Введите сумму депозита в USDC.');
+      return;
+    }
+    const targetMinDeposit = targetPool.liveMinDepositUsdc ?? readUsdcAmount(targetPool.min_deposit_usdc);
+    if (targetMinDeposit > 0n && amountUsdc < targetMinDeposit) {
+      setError(`Минимальный депозит: ${formatUnits(targetMinDeposit, 6, 6)} ${targetPool.symbol}.`);
+      return;
+    }
+
+    const coins = await fetchAllCoins(client, currentOwnerAddress, targetPool.coin_type);
+    const totalBalance = coins.reduce((sum, coin) => sum + BigInt(coin.balance), 0n);
+    if (totalBalance < amountUsdc) {
+      setError('Недостаточно USDC на кошельке.');
+      return;
+    }
+
+    const tx = new Transaction();
+    tx.setSender(currentOwnerAddress);
+    const [payment] = buildCoinPayments(tx, coins, [amountUsdc]);
+    const poolAccountingId = getPoolAccountingId(targetPool);
+    if (SUI_FUND_CONFIG.shareFeeConfigId && poolAccountingId) {
+      tx.moveCall({
+        target: `${FUND_MODULE_PACKAGE_ID}::fund_core::deposit_to_pool_with_fee`,
+        typeArguments: [targetPool.coin_type],
+        arguments: [
+          tx.object(SUI_FUND_CONFIG.navStateId),
+          tx.object(SUI_FUND_CONFIG.shareConfigId),
+          tx.object(SUI_FUND_CONFIG.shareFeeConfigId),
+          tx.object(targetPool.pool_object_id),
+          tx.object(poolAccountingId),
+          tx.object(positionId),
+          payment,
+          tx.object(CLOCK_OBJECT_ID),
+        ],
+      });
+    } else {
+      tx.moveCall({
+        target: `${FUND_MODULE_PACKAGE_ID}::fund_core::deposit_to_pool`,
+        typeArguments: [targetPool.coin_type],
+        arguments: [
+          tx.object(SUI_FUND_CONFIG.navStateId),
+          tx.object(SUI_FUND_CONFIG.shareConfigId),
+          tx.object(targetPool.pool_object_id),
+          tx.object(positionId),
+          payment,
+          tx.object(CLOCK_OBJECT_ID),
+        ],
+      });
+    }
+    const submittedAmount = `${formatUnits(amountUsdc, 6, 6)} ${targetPool.symbol}`;
+    const ok = await runTx(label, tx);
+    if (ok) {
+      setLastDepositAmountLabel(submittedAmount);
+    }
+  }
+
   async function handleDeposit() {
-    if (!account?.address) {
-      setError('Подключите Sui кошелек.');
+    if (!routePool) {
+      setError('Откройте страницу конкретного пула.');
+      return;
+    }
+    if (!parsedAmount || parsedAmount <= 0n) {
+      setError('Введите сумму депозита в USDC.');
+      return;
+    }
+    await submitDeposit(routePool, parsedAmount);
+  }
+
+  async function handleWithdraw() {
+    if (!currentOwnerAddress) {
+      setError('Подключите Sui кошелек или войдите через Google zkLogin.');
       return;
     }
     if (!routePool) {
@@ -321,102 +916,174 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
       return;
     }
     if (!positionId) {
-      setError('Сначала создайте FundPosition для этого кошелька.');
+      setError('Для этого кошелька не найдена FundPosition.');
       return;
     }
-    if (!depositCoinType || !SUI_FUND_CONFIG.navStateId || !SUI_FUND_CONFIG.shareConfigId) {
-      setError('Не настроены VITE_SUI_USDC_TYPE / NavState / ShareConfig.');
+    if (!SUI_FUND_CONFIG.navStateId || !SUI_FUND_CONFIG.shareConfigId) {
+      setError('Не настроены NavState / ShareConfig.');
       return;
     }
-    if (!parsedAmount || parsedAmount <= 0n) {
-      setError('Введите сумму депозита в USDC.');
+    const av8Amount = parseDecimalAmount(amount, AV8_DECIMALS);
+    if (!av8Amount || av8Amount <= 0n) {
+      setError('Введите сумму AV8 для вывода.');
       return;
     }
 
-    const coins = await fetchAllCoins(client, account.address, depositCoinType);
-    const totalBalance = coins.reduce((sum, coin) => sum + BigInt(coin.balance), 0n);
-    if (totalBalance < parsedAmount) {
-      setError('Недостаточно USDC на кошельке.');
+    const shareCoins = await fetchAllCoins(client, currentOwnerAddress, SHARE_TYPE);
+    const totalBalance = shareCoins.reduce((sum, coin) => sum + BigInt(coin.balance), 0n);
+    if (totalBalance < av8Amount) {
+      setError('Недостаточно AV8 на кошельке.');
       return;
     }
 
     const tx = new Transaction();
-    tx.setSender(account.address);
-    const [payment] = buildCoinPayments(tx, coins, [parsedAmount]);
+    tx.setSender(currentOwnerAddress);
+    const [av8Payment] = buildCoinPayments(tx, shareCoins, [av8Amount]);
     tx.moveCall({
-      target: `${SUI_FUND_CONFIG.packageId}::fund_core::deposit_to_pool`,
+      target: `${FUND_MODULE_PACKAGE_ID}::fund_core::withdraw_from_pool`,
       typeArguments: [routePool.coin_type],
       arguments: [
         tx.object(SUI_FUND_CONFIG.navStateId),
         tx.object(SUI_FUND_CONFIG.shareConfigId),
         tx.object(routePool.pool_object_id),
         tx.object(positionId),
-        payment,
+        av8Payment,
+        tx.pure.u64(0),
         tx.object(CLOCK_OBJECT_ID),
       ],
     });
-    await runTx('deposit', tx);
+    await runTx('withdraw', tx);
   }
 
-  const depositPanel = (
-    <aside className="h-fit rounded-2xl border border-white/[0.08] bg-white/[0.045] p-5">
-      <div className="flex items-center gap-3">
-        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-teal-400/10 text-teal-200">
-          <BadgeDollarSign className="h-5 w-5" />
-        </div>
-        <div>
-          <div className="text-lg font-semibold text-white">Инвестировать</div>
-          <div className="text-sm text-slate-400">{routePool?.name || 'Выберите пул'}</div>
-        </div>
-      </div>
+  async function handleQuickDeposit() {
+    if (!quickPool) {
+      setError('Выберите пул для учета инвестиционного мандата.');
+      return;
+    }
+    const value = parseDecimalAmount(quickAmount, 6);
+    if (!value || value <= 0n) {
+      setError('Введите сумму депозита в USDC.');
+      return;
+    }
+    await submitDeposit(quickPool, value, 'quick-deposit');
+  }
 
-      <div className="mt-5">
-        <ConnectButton />
-      </div>
+  function handleQuickRedeemRequest() {
+    if (!currentOwnerAddress) {
+      setError('Подключите Sui кошелек или войдите через Google zkLogin.');
+      return;
+    }
+    const value = parseDecimalAmount(quickAmount, AV8_DECIMALS);
+    if (!value || value <= 0n) {
+      setError('Введите сумму AV8 для выкупа.');
+      return;
+    }
+    if (av8Balance < value) {
+      setError('Недостаточно AV8 на кошельке.');
+      return;
+    }
+    if (!quickPool) {
+      setError('Выберите пул для заявки на выкуп.');
+      return;
+    }
+    if (!positionId) {
+      setError('Для этого кошелька не найдена FundPosition.');
+      return;
+    }
+    const poolAccountingId = getPoolAccountingId(quickPool);
+    if (!SUI_FUND_CONFIG.shareFeeConfigId || !poolAccountingId) {
+      setError('Не настроены ShareFeeConfig или PoolAccounting для выбранного пула. Создайте их в админке и сохраните object id в БД.');
+      return;
+    }
 
-      <div className="mt-5 grid gap-3">
-        <div className="rounded-xl border border-white/[0.07] bg-black/15 p-3">
-          <div className="flex items-center gap-2 text-xs uppercase tracking-[0.14em] text-slate-500">
-            <Wallet className="h-3.5 w-3.5" /> USDC balance
-          </div>
-          <div className="mt-1 font-semibold text-slate-100">{depositCoinType ? `${formatUnits(balance, 6)} ${routePool?.symbol || 'USDC'}` : 'coin type not set'}</div>
-        </div>
-        <div className="rounded-xl border border-white/[0.07] bg-black/15 p-3">
-          <div className="flex items-center gap-2 text-xs uppercase tracking-[0.14em] text-slate-500">
-            <CircleDollarSign className="h-3.5 w-3.5" /> AV8 expected
-          </div>
-          <div className="mt-1 font-semibold text-slate-100">{formatUnits(expectedAv8, AV8_DECIMALS)} AV8</div>
-        </div>
-      </div>
+    void (async () => {
+      const shareCoins = await fetchAllCoins(client, currentOwnerAddress, SHARE_TYPE);
+      const totalBalance = shareCoins.reduce((sum, coin) => sum + BigInt(coin.balance), 0n);
+      if (totalBalance < value) {
+        setError('Недостаточно AV8 на кошельке.');
+        return;
+      }
 
-      <label className="mt-5 block">
-        <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Сумма, USDC</span>
-        <input className={inputClass} inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} />
-      </label>
+      const tx = new Transaction();
+      tx.setSender(currentOwnerAddress);
+      const [av8Payment] = buildCoinPayments(tx, shareCoins, [value]);
+      tx.moveCall({
+        target: `${FUND_MODULE_PACKAGE_ID}::fund_core::request_withdraw_from_pool`,
+        typeArguments: [quickPool.coin_type],
+        arguments: [
+          tx.object(SUI_FUND_CONFIG.navStateId),
+          tx.object(SUI_FUND_CONFIG.shareConfigId),
+          tx.object(SUI_FUND_CONFIG.shareFeeConfigId),
+          tx.object(quickPool.pool_object_id),
+          tx.object(poolAccountingId),
+          tx.object(positionId),
+          av8Payment,
+          tx.object(CLOCK_OBJECT_ID),
+        ],
+      });
+      await runTx('withdraw-request', tx);
+    })().catch((err) => setError(err instanceof Error ? err.message : String(err)));
+  }
 
-      {!positionId ? (
-        <button
-          className="mt-5 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-slate-100 px-4 text-sm font-semibold text-slate-950 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
-          disabled={Boolean(busy) || !account?.address}
-          onClick={() => void handleOpenPosition()}
-        >
-          <Plus className="h-4 w-4" /> {busy === 'position' ? 'Создание...' : 'Создать FundPosition'}
-        </button>
-      ) : (
-        <button
-          className="mt-5 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-teal-300 px-4 text-sm font-semibold text-slate-950 transition hover:bg-teal-200 disabled:cursor-not-allowed disabled:opacity-60"
-          disabled={Boolean(busy) || !routePool}
-          onClick={() => void handleDeposit()}
-        >
-          <ArrowRightLeft className="h-4 w-4" /> {busy === 'deposit' ? 'Подпись...' : 'Внести в пул'}
-        </button>
-      )}
+  async function handleClaimRedeemRequest(request: PoolWithdrawRequestRecord) {
+    if (!currentOwnerAddress) {
+      setError('Подключите Sui кошелек или войдите через Google zkLogin.');
+      return;
+    }
+    const pool = activePools.find((item) => normalizeSwapWalletAddress(item.pool_object_id) === normalizeSwapWalletAddress(request.poolId));
+    if (!pool) {
+      setError('Пул для этой заявки не найден в активных пулах.');
+      return;
+    }
+    if (BigInt(Date.now()) < request.availableAtMs) {
+      setError(`Заявка будет доступна ${formatDateTime(Number(request.availableAtMs))}.`);
+      return;
+    }
+    const poolAccountingId = getPoolAccountingId(pool);
+    if (!poolAccountingId) {
+      setError('Для этого пула не сохранен PoolAccounting object id.');
+      return;
+    }
 
-      {notice ? <div className="mt-4 rounded-xl border border-emerald-300/20 bg-emerald-400/[0.08] p-3 text-sm text-emerald-100">{notice}</div> : null}
-      {error ? <div className="mt-4 rounded-xl border border-red-300/20 bg-red-400/[0.08] p-3 text-sm text-red-100">{error}</div> : null}
-      {lastDigest ? <div className="mt-4 break-all font-mono text-xs text-slate-500">{lastDigest}</div> : null}
-    </aside>
-  );
+    const tx = new Transaction();
+    tx.setSender(currentOwnerAddress);
+    tx.moveCall({
+      target: `${FUND_MODULE_PACKAGE_ID}::fund_core::claim_pool_withdrawal`,
+      typeArguments: [pool.coin_type],
+      arguments: [
+        tx.object(pool.pool_object_id),
+        tx.object(poolAccountingId),
+        tx.object(request.objectId),
+        tx.object(CLOCK_OBJECT_ID),
+      ],
+    });
+    await runTx('withdraw-claim', tx);
+  }
+
+  const walletCanSign = signingRoute.useExtension || signingRoute.useZkLogin;
+  const walletLabel = currentOwnerAddress ? shortId(currentOwnerAddress) : 'Not connected';
+  const availableLabel = formMode === 'deposit'
+    ? `${formatUnits(balance, 6)} ${routePool?.symbol || 'USDC'}`
+    : `${formatUnits(av8Balance, AV8_DECIMALS)} AV8`;
+  const receiveLabel = formMode === 'deposit'
+    ? `${formatUnits(expectedAv8, AV8_DECIMALS)} AV8`
+    : `${formatUnits(expectedUsdc, 6)} ${routePool?.symbol || 'USDC'}`;
+  const submitLabel = formMode === 'deposit' ? 'Внести' : 'Забрать';
+  const completedDepositLabel = formMode === 'deposit' && lastDepositAmountLabel ? `Внесено ${lastDepositAmountLabel}` : null;
+  const selectedWalletRequiresZkLogin = selectedLinkedWallet?.web3auth === 1;
+  const canSubmit = Boolean(routePool && currentOwnerAddress && walletCanSign && depositCoinType && !busy);
+  const quickParsedAmount = parseDecimalAmount(quickAmount, quickMode === 'deposit' ? 6 : AV8_DECIMALS) ?? 0n;
+  const quickMintFee = quickMode === 'deposit' ? applyBps(quickParsedAmount, shareSettings?.mint_fee_bps ?? 0) : 0n;
+  const quickNetDeposit = quickParsedAmount > quickMintFee ? quickParsedAmount - quickMintFee : 0n;
+  const quickExpectedAv8 = quickMode === 'deposit'
+    ? quickNetDeposit * (10n ** BigInt(AV8_DECIMALS)) / navPriceUsdc
+    : 0n;
+  const quickGrossRedeemUsdc = quickMode === 'redeem'
+    ? quickParsedAmount * navPriceUsdc / (10n ** BigInt(AV8_DECIMALS))
+    : 0n;
+  const quickRedeemFee = quickMode === 'redeem' ? applyBps(quickGrossRedeemUsdc, shareSettings?.redeem_fee_bps ?? 0) : 0n;
+  const quickExpectedRedeemUsdc = quickGrossRedeemUsdc > quickRedeemFee ? quickGrossRedeemUsdc - quickRedeemFee : 0n;
+  const quickCanSubmit = Boolean(currentOwnerAddress && walletCanSign && !busy && (quickMode === 'redeem' ? quickPool : quickPool));
 
   return (
     <main className="min-h-[calc(100vh-160px)] bg-slate-950 pb-20 pt-14">
@@ -436,7 +1103,7 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
 
       <section className="px-6 py-10">
         {routePool ? (
-          <div className="mx-auto grid max-w-7xl gap-6 xl:grid-cols-[1fr_390px]">
+          <div className="mx-auto grid max-w-7xl gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(450px,520px)]">
             <div className="space-y-6">
               <a
                 href={investRoot}
@@ -516,19 +1183,400 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
                 </div>
                 <div className="rounded-2xl border border-white/[0.08] bg-white/[0.035] p-4">
                   <div className="text-xs uppercase tracking-[0.14em] text-slate-500">Min deposit</div>
-                  <div className="mt-2 text-lg font-semibold text-white">{formatUnits(BigInt(routePool.min_deposit_usdc || '0'), 6)} {routePool.symbol}</div>
+                  <div className="mt-2 text-lg font-semibold text-white">{formatUnits(minDepositAmount, 6, 6)} {routePool.symbol}</div>
                 </div>
               </div>
             </div>
 
-            {depositPanel}
+            <aside className="h-fit space-y-4">
+              <section className="rounded-[2rem] border border-white/10 bg-white/[0.045] p-5 backdrop-blur-2xl sm:p-6">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Доступный кошелек</div>
+                    <div className="mt-2 text-xl font-semibold text-white">{walletLabel}</div>
+                  </div>
+                  <div className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em] ${walletCanSign ? 'bg-emerald-400/10 text-emerald-200' : 'bg-amber-400/10 text-amber-100'}`}>
+                    {walletCanSign
+                      ? selectedLinkedWallet?.web3auth === 1
+                        ? 'zkLogin'
+                        : 'wallet'
+                      : 'no signer'}
+                  </div>
+                </div>
+
+                <label className="mt-5 block">
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    Кошельки аккаунта Google
+                  </span>
+                  {suiLinked.length > 0 ? (
+                    <select
+                      value={selectedSuiAddress}
+                      onChange={(event) => setSelectedSuiAddress(event.target.value)}
+                      className="h-12 w-full rounded-xl border border-white/[0.09] bg-slate-950/70 px-3 text-sm font-semibold text-slate-100 outline-none transition focus:border-teal-300/40"
+                    >
+                      {suiLinked.map((wallet) => {
+                        const address = normalizeSwapWalletAddress(wallet.address);
+                        return (
+                          <option key={`${address}-${wallet.web3auth ?? 'wallet'}`} value={address}>
+                            {wallet.web3auth === 1 ? 'Google zkLogin' : 'Sui wallet'} - {shortId(address)}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  ) : (
+                    <div className="rounded-xl border border-amber-300/15 bg-amber-400/10 p-3 text-sm leading-6 text-amber-100">
+                      {hasGoogleIdentity
+                        ? 'К аккаунту Google пока не привязан Sui-кошелек.'
+                        : 'Войдите через Google в portfolio, чтобы увидеть привязанные кошельки.'}
+                    </div>
+                  )}
+                </label>
+
+                {linkedWalletsError ? (
+                  <div className="mt-3 rounded-xl border border-rose-300/15 bg-rose-400/10 p-3 text-sm text-rose-100">
+                    {linkedWalletsError}
+                  </div>
+                ) : null}
+
+                <div className="mt-4 grid grid-cols-2 rounded-xl border border-white/[0.08] bg-slate-950/60 p-1">
+                  {[
+                    ['deposit', 'Добавить'],
+                    ['withdraw', 'Забрать'],
+                  ].map(([mode, label]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => {
+                        const nextMode = mode as 'deposit' | 'withdraw';
+                        setFormMode(nextMode);
+                        setError(null);
+                        setNotice(null);
+                        setLastDepositAmountLabel(null);
+                        if (nextMode === 'deposit') {
+                          setAmountEdited(false);
+                        }
+                      }}
+                      className={`h-10 rounded-lg text-sm font-semibold transition ${
+                        formMode === mode
+                          ? 'bg-teal-300 text-slate-950'
+                          : 'text-slate-300 hover:bg-white/[0.05] hover:text-white'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="mt-4 rounded-2xl border border-sky-400/18 bg-sky-400/10 p-4">
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-100/75">
+                    {formMode === 'deposit' ? 'Доступно USDC' : 'Доступно AV8'}
+                  </div>
+                  <div className="mt-2 text-2xl font-semibold text-white">
+                    {loading && currentOwnerAddress ? messages.invest.depositLoading : availableLabel}
+                  </div>
+                </div>
+
+                <label className="mt-4 block">
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    {formMode === 'deposit' ? 'Внести' : 'Забрать'}
+                  </span>
+                  <div className="flex overflow-hidden rounded-xl border border-white/[0.09] bg-slate-950/70 focus-within:border-teal-300/40">
+                    <input
+                      value={amount}
+                      onChange={(event) => {
+                        setAmount(event.target.value);
+                        setAmountEdited(true);
+                        setLastDepositAmountLabel(null);
+                      }}
+                      inputMode="decimal"
+                      className="h-12 min-w-0 flex-1 bg-transparent px-3 text-sm text-slate-100 outline-none"
+                    />
+                    <div className="flex items-center border-l border-white/[0.08] px-3 text-sm font-semibold text-slate-300">
+                      {formMode === 'deposit' ? routePool.symbol : 'AV8'}
+                    </div>
+                  </div>
+                  {formMode === 'deposit' && minDepositAmount > 0n ? (
+                    <div className="mt-2 text-xs text-slate-500">
+                      Минимальный депозит: {formatUnits(minDepositAmount, 6, 6)} {routePool.symbol}
+                    </div>
+                  ) : null}
+                </label>
+
+                <div className="mt-4 rounded-2xl border border-white/[0.08] bg-slate-950/50 p-4">
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Получим</div>
+                  <div className="mt-2 text-xl font-semibold text-white">{receiveLabel}</div>
+                </div>
+
+                {notice ? (
+                  <div className="mt-4 rounded-2xl border border-emerald-300/15 bg-emerald-400/10 p-3 text-sm leading-6 text-emerald-100">
+                    {notice}
+                  </div>
+                ) : null}
+
+                {error ? (
+                  <div className="mt-4 rounded-2xl border border-rose-300/15 bg-rose-400/10 p-3 text-sm leading-6 text-rose-100">
+                    {error}
+                  </div>
+                ) : null}
+
+                {lastDigest ? (
+                  <div className="mt-4 break-all rounded-2xl border border-sky-300/15 bg-sky-400/10 p-3 font-mono text-xs text-sky-100">
+                    tx: {lastDigest}
+                  </div>
+                ) : null}
+
+                <div className="mt-5 grid gap-3">
+                  {selectedWalletRequiresZkLogin ? (
+                    <a
+                      href={`${getBasePath() === '/' ? '' : getBasePath()}/portfolio`}
+                      className="inline-flex h-11 items-center justify-center rounded-xl border border-teal-300/25 bg-teal-400/10 px-4 text-sm font-semibold text-teal-100 transition hover:bg-teal-400/15"
+                    >
+                      Google zkLogin
+                    </a>
+                  ) : (
+                    <ConnectButton />
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => void (!positionId && formMode === 'deposit' ? handleOpenPosition() : formMode === 'deposit' ? handleDeposit() : handleWithdraw())}
+                    disabled={!canSubmit}
+                    className="inline-flex h-12 w-full items-center justify-center rounded-xl bg-teal-300 px-4 text-sm font-bold text-slate-950 transition hover:bg-teal-200 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {busy ? (busy === 'position' ? 'Создание...' : 'Подпись...') : completedDepositLabel || (!positionId && formMode === 'deposit' ? 'Создать FundPosition' : submitLabel)}
+                  </button>
+                </div>
+              </section>
+
+              {activePools.length > 1 ? (
+                <label className="block rounded-2xl border border-white/[0.08] bg-white/[0.035] p-4">
+                  <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                    Другой пул
+                  </span>
+                  <select
+                    value={routePool.pool_object_id}
+                    onChange={(event) => {
+                      const nextPool = activePools.find((pool) => pool.pool_object_id === event.target.value);
+                      if (nextPool) {
+                        window.location.href = getPoolHref(nextPool);
+                      }
+                    }}
+                    className="h-11 w-full rounded-xl border border-white/[0.09] bg-slate-950/70 px-3 text-sm font-semibold text-slate-100 outline-none transition focus:border-teal-300/40"
+                  >
+                    {activePools.map((pool) => (
+                      <option key={pool.pool_object_id || pool.id} value={pool.pool_object_id}>
+                        {pool.name} - {pool.symbol} - {formatBps(pool.target_apy_bps)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+            </aside>
           </div>
         ) : poolObjectId && !loading ? (
           <div className="mx-auto max-w-7xl rounded-2xl border border-amber-300/20 bg-amber-400/[0.08] p-5 text-sm text-amber-100">
             Пул не найден или выключен. <a className="font-semibold underline" href={investRoot}>Вернуться к таблице пулов</a>.
           </div>
         ) : (
-          <div className="mx-auto max-w-7xl space-y-4">
+          <div className="mx-auto max-w-7xl space-y-6">
+            <section className="rounded-[2rem] border border-white/[0.08] bg-white/[0.04] p-5 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)]">
+              <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+                <div>
+                  <div className="text-sm uppercase tracking-[0.18em] text-teal-200">AV8 fund token</div>
+                  <h2 className="mt-2 text-2xl font-semibold text-white">Внести депозит и получить AV8</h2>
+                  <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-400">
+                    Депозит минтит AV8 как долю в капитале фонда. Выкуп AV8 оформляется заявкой с задержкой {REDEEM_DELAY_DAYS} дня, чтобы фонд успел вернуть ликвидность из рабочих стратегий.
+                  </p>
+
+                  <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-2xl border border-white/[0.08] bg-slate-950/45 p-4">
+                      <div className="text-xs uppercase tracking-[0.16em] text-slate-500">NAV AV8</div>
+                      <div className="mt-2 text-lg font-semibold text-white">{formatUnits(navPriceUsdc, 6, 6)} USDC</div>
+                    </div>
+                    <div className="rounded-2xl border border-white/[0.08] bg-slate-950/45 p-4">
+                      <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Комиссия выпуска</div>
+                      <div className="mt-2 text-lg font-semibold text-white">{formatBps(shareSettings?.mint_fee_bps ?? 0)}</div>
+                    </div>
+                    <div className="rounded-2xl border border-white/[0.08] bg-slate-950/45 p-4">
+                      <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Комиссия выкупа</div>
+                      <div className="mt-2 text-lg font-semibold text-white">{formatBps(shareSettings?.redeem_fee_bps ?? 0)}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-white/[0.08] bg-slate-950/65 p-4">
+                  <div className="grid grid-cols-2 rounded-xl border border-white/[0.08] bg-slate-950/60 p-1">
+                    {[
+                      ['deposit', 'Внести'],
+                      ['redeem', 'Выкуп'],
+                    ].map(([mode, label]) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => {
+                          setQuickMode(mode as 'deposit' | 'redeem');
+                          setQuickAmount('');
+                          setError(null);
+                          setNotice(null);
+                        }}
+                        className={`h-10 rounded-lg text-sm font-semibold transition ${
+                          quickMode === mode ? 'bg-teal-300 text-slate-950' : 'text-slate-300 hover:bg-white/[0.05] hover:text-white'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <label className="mt-4 block">
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Доступный кошелек</span>
+                    {suiLinked.length > 0 ? (
+                      <select
+                        value={selectedSuiAddress}
+                        onChange={(event) => setSelectedSuiAddress(event.target.value)}
+                        className="h-11 w-full rounded-xl border border-white/[0.09] bg-slate-950/70 px-3 text-sm font-semibold text-slate-100 outline-none transition focus:border-teal-300/40"
+                      >
+                        {suiLinked.map((wallet) => {
+                          const address = normalizeSwapWalletAddress(wallet.address);
+                          return (
+                            <option key={`${address}-${wallet.web3auth ?? 'wallet'}`} value={address}>
+                              {wallet.web3auth === 1 ? 'Google zkLogin' : 'Sui wallet'} - {shortId(address)}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    ) : (
+                      <div className="rounded-xl border border-amber-300/15 bg-amber-400/10 p-3 text-sm leading-6 text-amber-100">
+                        Войдите через Google в portfolio, чтобы увидеть привязанные кошельки.
+                      </div>
+                    )}
+                  </label>
+
+                  {quickMode === 'deposit' ? (
+                    <label className="mt-4 block">
+                      <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Пул учета</span>
+                      <select
+                        value={quickPool?.pool_object_id || quickPoolObjectId}
+                        onChange={(event) => setQuickPoolObjectId(event.target.value)}
+                        className="h-11 w-full rounded-xl border border-white/[0.09] bg-slate-950/70 px-3 text-sm font-semibold text-slate-100 outline-none transition focus:border-teal-300/40"
+                      >
+                        {activePools.map((pool) => (
+                          <option key={pool.pool_object_id || pool.id} value={pool.pool_object_id}>
+                            {pool.name} - {formatBps(pool.realized_apy_bps || pool.target_apy_bps)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+
+                  <label className="mt-4 block">
+                    <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                      {quickMode === 'deposit' ? 'Сумма депозита' : 'Сумма AV8 к выкупу'}
+                    </span>
+                    <div className="flex overflow-hidden rounded-xl border border-white/[0.09] bg-slate-950/70 focus-within:border-teal-300/40">
+                      <input
+                        value={quickAmount}
+                        onChange={(event) => setQuickAmount(event.target.value.replace(/[^\d.,]/g, ''))}
+                        inputMode="decimal"
+                        className="h-12 min-w-0 flex-1 bg-transparent px-3 text-sm text-slate-100 outline-none"
+                        placeholder="0.00"
+                      />
+                      <div className="flex items-center border-l border-white/[0.08] px-3 text-sm font-semibold text-slate-300">
+                        {quickMode === 'deposit' ? 'USDC' : 'AV8'}
+                      </div>
+                    </div>
+                  </label>
+
+                  <div className="mt-4 rounded-2xl border border-white/[0.08] bg-white/[0.035] p-4">
+                    <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                      {quickMode === 'deposit' ? 'Получим AV8' : 'Получим USDC после задержки'}
+                    </div>
+                    <div className="mt-2 text-xl font-semibold text-white">
+                      {quickMode === 'deposit'
+                        ? `${formatUnits(quickExpectedAv8, AV8_DECIMALS, 6)} AV8`
+                        : `${formatUnits(quickExpectedRedeemUsdc, 6, 6)} USDC`}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {quickMode === 'deposit'
+                        ? `Комиссия: ${formatUnits(quickMintFee, 6, 6)} USDC`
+                        : `Комиссия: ${formatUnits(quickRedeemFee, 6, 6)} USDC · доступно через ${REDEEM_DELAY_DAYS} дня`}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid gap-3">
+                    {selectedWalletRequiresZkLogin ? (
+                      <a
+                        href={`${getBasePath() === '/' ? '' : getBasePath()}/portfolio`}
+                        className="inline-flex h-11 items-center justify-center rounded-xl border border-teal-300/25 bg-teal-400/10 px-4 text-sm font-semibold text-teal-100 transition hover:bg-teal-400/15"
+                      >
+                        Google zkLogin
+                      </a>
+                    ) : (
+                      <ConnectButton />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void (!positionId && quickMode === 'deposit' ? handleOpenPosition() : quickMode === 'deposit' ? handleQuickDeposit() : handleQuickRedeemRequest())}
+                      disabled={!quickCanSubmit}
+                      className="inline-flex h-12 w-full items-center justify-center rounded-xl bg-teal-300 px-4 text-sm font-bold text-slate-950 transition hover:bg-teal-200 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {busy ? (busy === 'position' ? 'Создание...' : 'Подпись...') : !positionId && quickMode === 'deposit' ? 'Создать FundPosition' : quickMode === 'deposit' ? 'Внести' : 'Создать заявку на выкуп'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {onChainRedeemRequests.length > 0 || redeemRequests.length > 0 ? (
+                <div className="mt-5 rounded-2xl border border-white/[0.08] bg-slate-950/45 p-4">
+                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Заявки на выкуп</div>
+                  <div className="mt-3 grid gap-2">
+                    {onChainRedeemRequests.map((request) => {
+                      const ready = BigInt(Date.now()) >= request.availableAtMs;
+                      return (
+                        <div key={request.objectId} className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white/[0.035] px-3 py-3 text-sm">
+                          <div>
+                            <div className="text-slate-300">
+                              {formatUnits(request.burnedAv8, AV8_DECIMALS, 6)} AV8 → {formatUnits(request.amountUsdc, 6, 6)} USDC
+                            </div>
+                            <div className="mt-1 font-mono text-xs text-slate-600">{shortId(request.objectId)}</div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <div className="text-slate-500">Доступно: {formatDateTime(Number(request.availableAtMs))}</div>
+                            <button
+                              type="button"
+                              onClick={() => void handleClaimRedeemRequest(request)}
+                              disabled={!ready || Boolean(busy)}
+                              className="inline-flex h-9 items-center justify-center rounded-lg border border-teal-300/25 bg-teal-300/10 px-3 text-xs font-bold text-teal-100 transition hover:bg-teal-300/15 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              Получить
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {redeemRequests.map((request) => (
+                      <div key={request.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white/[0.035] px-3 py-3 text-sm">
+                        <div className="text-slate-300">{request.amountAv8} AV8 → {request.expectedUsdc} USDC</div>
+                        <div className="text-slate-500">Доступно: {formatDateTime(request.availableAt)}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </section>
+
+            {notice ? (
+              <div className="rounded-2xl border border-emerald-300/15 bg-emerald-400/10 p-4 text-sm leading-6 text-emerald-100">
+                {notice}
+              </div>
+            ) : null}
+
+            {error ? (
+              <div className="rounded-2xl border border-rose-300/15 bg-rose-400/10 p-4 text-sm leading-6 text-rose-100">
+                {error}
+              </div>
+            ) : null}
+
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="text-sm uppercase tracking-[0.18em] text-teal-200">Пулы фонда</div>
@@ -543,35 +1591,7 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
               </button>
             </div>
 
-            <div className="overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.035]">
-              <div className="grid grid-cols-[1.4fr_0.7fr_0.7fr_0.8fr_0.9fr_44px] gap-3 border-b border-white/[0.07] px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                <div>Pool</div>
-                <div>TVL</div>
-                <div>APY</div>
-                <div>Risk</div>
-                <div>Min deposit</div>
-                <div />
-              </div>
-              {activePools.map((pool) => (
-                <a
-                  key={pool.id}
-                  href={getPoolHref(pool)}
-                  className="grid grid-cols-[1.4fr_0.7fr_0.7fr_0.8fr_0.9fr_44px] gap-3 border-b border-white/[0.05] px-4 py-4 text-sm text-slate-200 transition last:border-b-0 hover:bg-white/[0.045]"
-                >
-                  <div className="min-w-0">
-                    <div className="truncate font-semibold text-white">{pool.name}</div>
-                    <div className="mt-1 truncate text-xs text-slate-500">{pool.description || shortId(pool.pool_object_id)}</div>
-                  </div>
-                  <div className="font-mono text-xs text-slate-300">{pool.liveBalance === null ? 'n/a' : `${formatUnits(pool.liveBalance, 6)} ${pool.symbol}`}</div>
-                  <div className="font-semibold text-emerald-200">{formatBps(pool.target_apy_bps)}</div>
-                  <div>Risk {pool.risk_level}</div>
-                  <div>{formatUnits(BigInt(pool.min_deposit_usdc || '0'), 6)} {pool.symbol}</div>
-                  <div className="flex items-center justify-end text-slate-500">
-                    <ArrowRight className="h-4 w-4" />
-                  </div>
-                </a>
-              ))}
-            </div>
+            <InvestPoolsTable pools={activePools} />
 
             {!loading && activePools.length === 0 ? (
               <div className="rounded-2xl border border-amber-300/20 bg-amber-400/[0.08] p-5 text-sm text-amber-100">

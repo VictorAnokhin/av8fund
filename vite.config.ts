@@ -58,7 +58,45 @@ export default defineConfig(({ mode }) => {
       },
     },
     build: {
+      modulePreload: false,
       rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('preload-helper')) {
+              return 'preload-helper'
+            }
+
+            if (!id.includes('node_modules')) {
+              return undefined
+            }
+
+            if (id.includes('/buffer/')) {
+              return 'vendor-buffer'
+            }
+
+            if (id.includes('/react/') || id.includes('/react-dom/') || id.includes('/react-router/')) {
+              return 'vendor-react'
+            }
+
+            if (id.includes('/@mysten/') || id.includes('/@pythnetwork/') || id.includes('/@cetusprotocol/')) {
+              return 'vendor-sui'
+            }
+
+            if (id.includes('/@web3auth/')) {
+              return 'vendor-web3auth'
+            }
+
+            if (id.includes('/recharts/') || id.includes('/d3-')) {
+              return 'vendor-charts'
+            }
+
+            if (id.includes('/@radix-ui/') || id.includes('/lucide-react/') || id.includes('/motion/')) {
+              return 'vendor-ui'
+            }
+
+            return undefined
+          },
+        },
         onwarn(warning, warn) {
           if (
             warning.message.includes('contains an annotation that Rollup cannot interpret due to the position of the comment')

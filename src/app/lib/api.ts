@@ -1550,6 +1550,9 @@ export type FundPoolRecord = {
   pool_registry_id: string
   pool_admin_cap_id: string
   pool_object_id: string
+  pool_accounting_id: string
+  basket_vault_id: string
+  liquidity_wallet_address: string
   coin_type: string
   symbol: string
   name: string
@@ -1572,6 +1575,9 @@ export type FundPoolInput = {
   poolRegistryId?: string
   poolAdminCapId?: string
   poolObjectId: string
+  poolAccountingId?: string
+  basketVaultId?: string
+  liquidityWalletAddress?: string
   coinType: string
   symbol: string
   name: string
@@ -1593,6 +1599,9 @@ function toFundPoolPayload(input: FundPoolInput): Record<string, unknown> {
     pool_registry_id: input.poolRegistryId || '',
     pool_admin_cap_id: input.poolAdminCapId || '',
     pool_object_id: input.poolObjectId,
+    pool_accounting_id: input.poolAccountingId || '',
+    basket_vault_id: input.basketVaultId || '',
+    liquidity_wallet_address: input.liquidityWalletAddress || '',
     coin_type: input.coinType,
     symbol: input.symbol || 'USDC',
     name: input.name,

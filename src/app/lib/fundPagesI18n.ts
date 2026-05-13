@@ -11,6 +11,7 @@ export type FundBasketCopy = {
   nav: string;
   liquidSui: string;
   managedValue: string;
+  usdcSuffix: string;
   suiSuffix: string;
   loadingEllipsis: string;
   vaultsTitle: string;
@@ -28,7 +29,13 @@ export type FundBasketCopy = {
   whitelistedToken: string;
   vaultObjectId: string;
   amount: string;
-  valueInSui: string;
+  valueInUsdc: string;
+  oracleEstimate: string;
+  oracleEstimateBusy: string;
+  oracleQuotePrefix: string;
+  oracleValueLabel: string;
+  oracleTokenPriceLabel: string;
+  oracleSuiPriceLabel: string;
   positionKind: string;
   recipientWithdraw: string;
   createVault: string;
@@ -36,7 +43,7 @@ export type FundBasketCopy = {
   deposit: string;
   withdraw: string;
   placeholderAmount: string;
-  placeholderValueSui: string;
+  placeholderValueUsdc: string;
   placeholderPositionKind: string;
   placeholderVaultId: string;
   placeholderRecipient: string;
@@ -57,8 +64,8 @@ export type FundBasketCopy = {
   placeholderWorkingToken: string;
   placeholderExternalObjectId: string;
   placeholderRawAmount: string;
-  placeholderPrincipalSui: string;
-  placeholderCurrentSui: string;
+  placeholderPrincipalUsdc: string;
+  placeholderCurrentUsdc: string;
   activePosition: string;
   savePosition: string;
   close: string;
@@ -71,10 +78,12 @@ export type FundBasketCopy = {
     envConfigMissing: string;
     pickTokenConnect: string;
     vaultIdRequired: string;
-    fillAmountValueSui: string;
+    fillAmountValueUsdc: string;
     pickTokenVault: string;
     recipientRequired: string;
-    valueSuiRequired: string;
+    valueUsdcRequired: string;
+    oracleAmountRequired: string;
+    oraclePriceUnavailable: string;
   };
 };
 
@@ -146,6 +155,7 @@ export const fundBasketEn: FundBasketCopy = fb({
   nav: 'NAV',
   liquidSui: 'Liquid SUI',
   managedValue: 'Managed value',
+  usdcSuffix: ' USDC',
   suiSuffix: ' SUI',
   loadingEllipsis: '...',
   vaultsTitle: 'Vaults',
@@ -163,7 +173,13 @@ export const fundBasketEn: FundBasketCopy = fb({
   whitelistedToken: 'Whitelisted token',
   vaultObjectId: 'Vault object ID',
   amount: 'Amount',
-  valueInSui: 'Value in SUI',
+  valueInUsdc: 'Value in USDC',
+  oracleEstimate: 'Calculate by Pyth',
+  oracleEstimateBusy: 'Pricing...',
+  oracleQuotePrefix: 'Oracle quote',
+  oracleValueLabel: 'Value',
+  oracleTokenPriceLabel: 'Token price',
+  oracleSuiPriceLabel: 'SUI/USD',
   positionKind: 'Position kind',
   recipientWithdraw: 'Recipient for withdraw',
   createVault: 'Create vault',
@@ -171,7 +187,7 @@ export const fundBasketEn: FundBasketCopy = fb({
   deposit: 'Deposit',
   withdraw: 'Withdraw',
   placeholderAmount: '10.5',
-  placeholderValueSui: '10.5',
+  placeholderValueUsdc: '10.5',
   placeholderPositionKind: 'coin / lp / lending',
   placeholderVaultId: '0x...',
   placeholderRecipient: '0x...',
@@ -192,8 +208,8 @@ export const fundBasketEn: FundBasketCopy = fb({
   placeholderWorkingToken: 'LP / working token type',
   placeholderExternalObjectId: 'external protocol object id',
   placeholderRawAmount: 'raw amount',
-  placeholderPrincipalSui: 'principal SUI',
-  placeholderCurrentSui: 'current SUI',
+  placeholderPrincipalUsdc: 'principal USDC',
+  placeholderCurrentUsdc: 'current USDC',
   activePosition: 'Active position',
   savePosition: 'Save position',
   close: 'Close',
@@ -206,10 +222,12 @@ export const fundBasketEn: FundBasketCopy = fb({
     envConfigMissing: '.env must include packageId, managerCapId, registryId, and basketId.',
     pickTokenConnect: 'Select a token and connect your wallet.',
     vaultIdRequired: 'Enter the vault object ID.',
-    fillAmountValueSui: 'Fill in amount and value in SUI.',
+    fillAmountValueUsdc: 'Fill in amount and value in USDC.',
     pickTokenVault: 'Select a token and vault.',
     recipientRequired: 'Enter recipient.',
-    valueSuiRequired: 'Enter value in SUI.',
+    valueUsdcRequired: 'Enter value in USDC.',
+    oracleAmountRequired: 'Enter amount before oracle calculation.',
+    oraclePriceUnavailable: 'Oracle price is unavailable. Add a Pyth price feed ID in /tokens.',
   },
 });
 
@@ -227,6 +245,7 @@ export const fundBasketUa: FundBasketCopy = fb({
   nav: 'NAV',
   liquidSui: 'Ліквідний SUI',
   managedValue: 'Керована вартість',
+  usdcSuffix: ' USDC',
   suiSuffix: ' SUI',
   loadingEllipsis: '...',
   vaultsTitle: 'Vault',
@@ -244,7 +263,13 @@ export const fundBasketUa: FundBasketCopy = fb({
   whitelistedToken: 'Токен з whitelist',
   vaultObjectId: 'Object ID vault',
   amount: 'Сума',
-  valueInSui: 'Вартість у SUI',
+  valueInUsdc: 'Вартість у USDC',
+  oracleEstimate: 'Розрахувати через Pyth',
+  oracleEstimateBusy: 'Оцінка...',
+  oracleQuotePrefix: 'Оракул',
+  oracleValueLabel: 'Вартість',
+  oracleTokenPriceLabel: 'Ціна токена',
+  oracleSuiPriceLabel: 'SUI/USD',
   positionKind: 'Тип позиції',
   recipientWithdraw: 'Отримувач для виводу',
   createVault: 'Створити vault',
@@ -252,7 +277,7 @@ export const fundBasketUa: FundBasketCopy = fb({
   deposit: 'Депозит',
   withdraw: 'Вивід',
   placeholderAmount: '10.5',
-  placeholderValueSui: '10.5',
+  placeholderValueUsdc: '10.5',
   placeholderPositionKind: 'coin / lp / lending',
   placeholderVaultId: '0x...',
   placeholderRecipient: '0x...',
@@ -273,8 +298,8 @@ export const fundBasketUa: FundBasketCopy = fb({
   placeholderWorkingToken: 'тип LP / робочого токена',
   placeholderExternalObjectId: 'id об’єкта в протоколі',
   placeholderRawAmount: 'сума в найменших одиницях',
-  placeholderPrincipalSui: 'principal SUI',
-  placeholderCurrentSui: 'поточний SUI',
+  placeholderPrincipalUsdc: 'principal USDC',
+  placeholderCurrentUsdc: 'поточний USDC',
   activePosition: 'Активна позиція',
   savePosition: 'Зберегти позицію',
   close: 'Закрити',
@@ -287,10 +312,12 @@ export const fundBasketUa: FundBasketCopy = fb({
     envConfigMissing: 'У .env мають бути packageId, managerCapId, registryId та basketId.',
     pickTokenConnect: 'Оберіть токен і підключіть гаманець.',
     vaultIdRequired: 'Вкажіть object ID vault.',
-    fillAmountValueSui: 'Заповніть amount та value in SUI.',
+    fillAmountValueUsdc: 'Заповніть amount та value in USDC.',
     pickTokenVault: 'Оберіть токен і vault.',
     recipientRequired: 'Вкажіть отримувача.',
-    valueSuiRequired: 'Вкажіть value in SUI.',
+    valueUsdcRequired: 'Вкажіть value in USDC.',
+    oracleAmountRequired: 'Вкажіть суму перед розрахунком через оракул.',
+    oraclePriceUnavailable: 'Ціна оракула недоступна. Додайте Pyth price feed ID у /tokens.',
   },
 });
 
@@ -308,6 +335,7 @@ export const fundBasketRu: FundBasketCopy = fb({
   nav: 'NAV',
   liquidSui: 'Ликвидный SUI',
   managedValue: 'Управляемая стоимость',
+  usdcSuffix: ' USDC',
   suiSuffix: ' SUI',
   loadingEllipsis: '...',
   vaultsTitle: 'Vault',
@@ -325,7 +353,13 @@ export const fundBasketRu: FundBasketCopy = fb({
   whitelistedToken: 'Токен из whitelist',
   vaultObjectId: 'Object ID vault',
   amount: 'Сумма',
-  valueInSui: 'Стоимость в SUI',
+  valueInUsdc: 'Стоимость в USDC',
+  oracleEstimate: 'Рассчитать через Pyth',
+  oracleEstimateBusy: 'Оценка...',
+  oracleQuotePrefix: 'Оракул',
+  oracleValueLabel: 'Стоимость',
+  oracleTokenPriceLabel: 'Цена токена',
+  oracleSuiPriceLabel: 'SUI/USD',
   positionKind: 'Тип позиции',
   recipientWithdraw: 'Получатель для вывода',
   createVault: 'Создать vault',
@@ -333,7 +367,7 @@ export const fundBasketRu: FundBasketCopy = fb({
   deposit: 'Депозит',
   withdraw: 'Вывод',
   placeholderAmount: '10.5',
-  placeholderValueSui: '10.5',
+  placeholderValueUsdc: '10.5',
   placeholderPositionKind: 'coin / lp / lending',
   placeholderVaultId: '0x...',
   placeholderRecipient: '0x...',
@@ -354,8 +388,8 @@ export const fundBasketRu: FundBasketCopy = fb({
   placeholderWorkingToken: 'тип LP / рабочего токена',
   placeholderExternalObjectId: 'id объекта в протоколе',
   placeholderRawAmount: 'сырое количество',
-  placeholderPrincipalSui: 'principal SUI',
-  placeholderCurrentSui: 'текущий SUI',
+  placeholderPrincipalUsdc: 'principal USDC',
+  placeholderCurrentUsdc: 'текущий USDC',
   activePosition: 'Активная позиция',
   savePosition: 'Сохранить позицию',
   close: 'Закрыть',
@@ -368,10 +402,12 @@ export const fundBasketRu: FundBasketCopy = fb({
     envConfigMissing: 'В .env должны быть packageId, managerCapId, registryId и basketId.',
     pickTokenConnect: 'Выберите токен и подключите кошелёк.',
     vaultIdRequired: 'Укажите vault object ID.',
-    fillAmountValueSui: 'Заполните amount и value in SUI.',
+    fillAmountValueUsdc: 'Заполните amount и value in USDC.',
     pickTokenVault: 'Выберите токен и vault.',
     recipientRequired: 'Укажите получателя.',
-    valueSuiRequired: 'Укажите value in SUI.',
+    valueUsdcRequired: 'Укажите value in USDC.',
+    oracleAmountRequired: 'Укажите сумму перед расчётом через оракул.',
+    oraclePriceUnavailable: 'Цена оракула недоступна. Добавьте Pyth price feed ID в /tokens.',
   },
 });
 

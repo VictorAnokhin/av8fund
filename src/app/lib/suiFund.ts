@@ -8,16 +8,19 @@ import {
   SUI_RWA_PACKAGE_ID,
   SUI_MANAGER_CAP_ID,
   SUI_NETWORK,
+  SUI_MODULE_PACKAGE_ID,
   SUI_PACKAGE_ID,
   SUI_POSITION_ID,
   SUI_REGISTRY_ID,
   SUI_SHARE_ADMIN_CAP_ID,
   SUI_SHARE_CONFIG_ID,
+  SUI_SHARE_FEE_CONFIG_ID,
   SUI_SHARE_TREASURY_CAP_ID,
   SUI_NAV_STATE_ID,
   SUI_NAV_ADMIN_CAP_ID,
   SUI_POOL_REGISTRY_ID,
   SUI_POOL_ADMIN_CAP_ID,
+  SUI_POOL_ACCOUNTING_ID,
   SUI_USDC_TYPE,
   SUI_PYTH_OBJECT_ID,
   SUI_STRATEGY_ID,
@@ -72,11 +75,11 @@ export const AV8_REGISTRY_ID =
 export const AV8_MANAGER_CAP_ID =
   SUI_MANAGER_CAP_ID || '0xf7f363f67f8a5d7e4d04b25cdffd1f37ce290f823ed50ba136b1c2c76cf6cd47';
 export const AV8_OWNER_CAP_ID =
-  '0x96ca379e8a0cf548d1826b8c21460e97bf6737c8c89005ce9395649d66da738c';
+  '0xe6aa1f6988de4eff9593e350864a4f4b9ae3bd51ece69997126b466bfd278374';
 export const AV8_STRATEGY_MANAGER_CAP_ID =
   SUI_MANAGER_CAP_ID || '0xf7f363f67f8a5d7e4d04b25cdffd1f37ce290f823ed50ba136b1c2c76cf6cd47';
 export const AV8_UPGRADE_CAP_ID =
-  '0x5aef089e40735d7412f03ca4e963a82740f1e388259390bce668738e21050b90';
+  '0x4513daf596194e34e3c2a156749565ebb01c21bdca7c1eab5b5b5d7e04aa0ba6';
 export const AV8_STRATEGY_ID =
   SUI_STRATEGY_ID || '0x3a2536393bf6e41e2c23d4f3f5dd398922c15bb0c0bc2f1fa8c7d064cc9df2a7';
 export const AV8_POSITION_ID =
@@ -100,6 +103,7 @@ export const { networkConfig } = createNetworkConfig({
     url: resolveSuiSwapRpcUrl(),
     variables: {
       packageId: SUI_PACKAGE_ID,
+      modulePackageId: SUI_MODULE_PACKAGE_ID,
       basketId: SUI_BASKET_ID,
       strategyId: SUI_STRATEGY_ID,
       positionId: SUI_POSITION_ID,
@@ -113,6 +117,7 @@ export const SUI_FUND_CONFIG = {
   network: SUI_NETWORK,
   rpcUrl: resolveSuiSwapRpcUrl(),
   packageId: AV8_PACKAGE_ID,
+  modulePackageId: SUI_MODULE_PACKAGE_ID,
   basketId: AV8_BASKET_ID,
   registryId: AV8_REGISTRY_ID,
   adminCapId: SUI_ADMIN_CAP_ID || AV8_OWNER_CAP_ID,
@@ -123,12 +128,14 @@ export const SUI_FUND_CONFIG = {
   strategyId: AV8_STRATEGY_ID,
   positionId: AV8_POSITION_ID,
   shareConfigId: SUI_SHARE_CONFIG_ID,
+  shareFeeConfigId: SUI_SHARE_FEE_CONFIG_ID,
   shareAdminCapId: SUI_SHARE_ADMIN_CAP_ID,
   shareTreasuryCapId: SUI_SHARE_TREASURY_CAP_ID,
   navStateId: SUI_NAV_STATE_ID,
   navAdminCapId: SUI_NAV_ADMIN_CAP_ID,
   poolRegistryId: SUI_POOL_REGISTRY_ID,
   poolAdminCapId: SUI_POOL_ADMIN_CAP_ID,
+  poolAccountingId: SUI_POOL_ACCOUNTING_ID,
   usdcType: SUI_USDC_TYPE,
   googleClientId: SUI_GOOGLE_CLIENT_ID,
   pythObjectId: PYTH_OBJECT_ID, // New field

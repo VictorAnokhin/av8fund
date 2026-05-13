@@ -121,6 +121,7 @@ export type TokenAdminCopy = {
     basketConfig: string;
     missingDigest: string;
     fieldInteger: string;
+    totalWeightsTooHigh: string;
   };
   notices: {
     assetRegistered: string;
@@ -348,6 +349,8 @@ export const tokenAdminEn: TokenAdminCopy = {
     basketConfig: 'Basket, ManagerCap, or StrategyConfig is not configured.',
     missingDigest: 'Missing transaction digest in wallet response.',
     fieldInteger: '{label} must be an integer.',
+    totalWeightsTooHigh:
+      'Active token weights exceed 10000 bps. A fresh registry already has SUI at 10000 bps, so lower SUI first or add the new token with 0 bps.',
   },
   notices: {
     assetRegistered: 'Asset registered on-chain and saved to Laravel API.',
@@ -574,6 +577,8 @@ export const tokenAdminUa: TokenAdminCopy = {
     basketConfig: 'Не налаштовано кошик, ManagerCap або StrategyConfig.',
     missingDigest: 'У відповіді гаманця немає digest транзакції.',
     fieldInteger: 'Поле «{label}» має бути цілим числом.',
+    totalWeightsTooHigh:
+      'Сума активних ваг перевищує 10000 bps. У новому реєстрі SUI вже має 10000 bps, тому спочатку зменшіть SUI або додайте новий токен з 0 bps.',
   },
   notices: {
     assetRegistered: 'Актив зареєстровано ончейн і збережено в Laravel API.',
@@ -800,6 +805,8 @@ export const tokenAdminRu: TokenAdminCopy = {
     basketConfig: 'Не настроены корзина, ManagerCap или StrategyConfig.',
     missingDigest: 'В ответе кошелька нет digest транзакции.',
     fieldInteger: 'Поле «{label}» должно быть целым числом.',
+    totalWeightsTooHigh:
+      'Сумма активных весов превышает 10000 bps. В новом реестре SUI уже занимает 10000 bps, поэтому сначала уменьшите SUI или добавьте новый токен с 0 bps.',
   },
   notices: {
     assetRegistered: 'Актив зарегистрирован ончейн и сохранён в Laravel API.',

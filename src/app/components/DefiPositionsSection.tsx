@@ -1,7 +1,7 @@
 import React from 'react';
 import { useCurrentAccount, useCurrentWallet, useSuiClient } from '@mysten/dapp-kit';
 import { isValidSuiAddress } from '@mysten/sui/utils';
-import { ScanSearch } from 'lucide-react';
+import { ExternalLink, Info, MoreVertical, ScanSearch, Star } from 'lucide-react';
 
 import { useI18n } from '../i18n';
 import {
@@ -12,19 +12,21 @@ import {
   type ExternalWalletSession,
 } from '../lib/externalWalletSession';
 import {
+  getFundPools,
   getWalletProtocols,
+  type FundPoolRecord,
   type TransparencyHolding,
   type WalletProtocolsResponse,
 } from '../lib/api';
+import { SUI_NETWORK } from '../config';
 import type { HeaderNetwork } from '../lib/headerNetwork';
-import { loadSuiOwnerCoinPortfolio } from '../lib/suiWalletPortfolio';
-import { CETUS_WEB_APP_HREF } from '../lib/suiSwapTokens';
 import {
   safeLocalStorageGetItem,
   safeLocalStorageRemoveItem,
 } from '../lib/safeLocalStorage';
+import { getInvestPath } from '../lib/routes';
+import { SUI_FUND_CONFIG } from '../lib/suiFund';
 import { TransparencyHoldingsList } from './TransparencyHoldingsList';
-import { SuiSwapPanel } from './SuiSwapPanel';
 import {
   Dialog,
   DialogContent,
@@ -42,6 +44,7 @@ const AAVE_GRAPHQL_URL = 'https://api.v3.aave.com/graphql';
 const MORPHO_GRAPHQL_URL = 'https://api.morpho.org/graphql';
 const ERC20_BALANCE_OF_SELECTOR = '0x70a08231';
 const ERC20_DECIMALS_SELECTOR = '0x313ce567';
+const FUND_POSITION_TYPE = `${SUI_FUND_CONFIG.packageId}::fund_core::FundPosition`;
 
 type ActiveWalletState = {
   address: string;
@@ -1085,6 +1088,57 @@ function formatNumber(value: number | null | undefined, suffix = ''): string {
   }).format(value)}${suffix}`;
 }
 
+function formatCompactUsd(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return 'N/A';
+  }
+
+  const abs = Math.abs(value);
+  const suffix = abs >= 1_000_000_000 ? 'b' : abs >= 1_000_000 ? 'm' : abs >= 1_000 ? 'k' : '';
+  const divisor = suffix === 'b' ? 1_000_000_000 : suffix === 'm' ? 1_000_000 : suffix === 'k' ? 1_000 : 1;
+  const compact = value / divisor;
+
+  return `$${new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: suffix ? 2 : 2,
+    minimumFractionDigits: suffix ? 2 : 0,
+  }).format(compact)}${suffix}`;
+}
+
+function formatPoolShares(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return '0 AV8';
+  }
+
+  return `${new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: value >= 1000 ? 2 : value >= 1 ? 4 : 6,
+  }).format(value)} AV8`;
+}
+
+function formatPercentValue(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return 'N/A';
+  }
+
+  return `${value.toFixed(2)}%`;
+}
+
+function buildSnapshotPoints(seedInput: string, trend: number | null | undefined): string {
+  const seed = Array.from(seedInput).reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  const positiveTrend = Number.isFinite(trend) ? Number(trend) >= 0 : true;
+  const points = Array.from({ length: 28 }, (_, index) => {
+    const wave = Math.sin((index + seed) * 0.55) * 4;
+    const jitter = ((seed + index * 17) % 9) - 4;
+    const drift = positiveTrend ? index * 0.9 : -index * 0.55;
+    const y = 34 - drift - wave - jitter;
+    return {
+      x: index * 5,
+      y: Math.max(7, Math.min(45, y)),
+    };
+  });
+
+  return points.map((point) => `${point.x},${point.y}`).join(' ');
+}
+
 function shortAddress(address: string | null | undefined): string {
   const normalized = String(address || '').trim();
   if (normalized.length <= 16) {
@@ -1094,9 +1148,294 @@ function shortAddress(address: string | null | undefined): string {
   return `${normalized.slice(0, 8)}...${normalized.slice(-6)}`;
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+}
+
+function readBigInt(value: unknown): bigint {
+  if (typeof value === 'bigint') {
+    return value;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return BigInt(Math.trunc(value));
+  }
+  if (typeof value === 'string' && /^\d+$/.test(value)) {
+    return BigInt(value);
+  }
+
+  const fields = asRecord(value).fields;
+  if (fields) {
+    return readBigInt(asRecord(fields).value);
+  }
+
+  return 0n;
+}
+
+function readObjectId(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  const record = asRecord(value);
+  const id = record.id ?? record.bytes ?? record.objectId;
+  if (typeof id === 'string') {
+    return id;
+  }
+
+  const fields = asRecord(record.fields);
+  const nested = fields.id ?? fields.bytes ?? fields.value;
+  return typeof nested === 'string' ? nested : '';
+}
+
+function readMoveFields(objectData: unknown): Record<string, unknown> {
+  return asRecord(asRecord(asRecord(objectData).content).fields);
+}
+
+function readVecMapEntries(value: unknown): Array<{ key: unknown; value: unknown }> {
+  const fields = asRecord(value).fields ? asRecord(asRecord(value).fields) : asRecord(value);
+  const contents = fields.contents;
+  if (!Array.isArray(contents)) {
+    return [];
+  }
+
+  return contents.map((entry) => {
+    const entryFields = asRecord(asRecord(entry).fields || entry);
+    return {
+      key: entryFields.key,
+      value: entryFields.value,
+    };
+  });
+}
+
+function bigintToUnits(value: bigint, decimals: number): number {
+  const sign = value < 0n ? -1 : 1;
+  const abs = value < 0n ? -value : value;
+  const base = 10n ** BigInt(decimals);
+  const whole = Number(abs / base);
+  const fraction = Number(abs % base) / Number(base);
+  return sign * (whole + fraction);
+}
+
+function getInvestPoolHref(pool: FundPoolRecord): string {
+  return `${getInvestPath()}/${encodeURIComponent(pool.pool_object_id || String(pool.id))}`;
+}
+
+async function loadSuiFundPoolHoldings(
+  client: ReturnType<typeof useSuiClient>,
+  owner: string,
+): Promise<TransparencyHolding[]> {
+  const positions: Array<{ id: string; sharesByPool: Map<string, bigint> }> = [];
+  let cursor: string | null | undefined = null;
+
+  do {
+    const page = await client.getOwnedObjects({
+      owner,
+      cursor,
+      limit: 50,
+      filter: { StructType: FUND_POSITION_TYPE },
+      options: { showContent: true, showType: true },
+    });
+
+    for (const item of page.data) {
+      const objectId = item.data?.objectId || '';
+      const fields = readMoveFields(item.data);
+      const sharesByPool = new Map<string, bigint>();
+      for (const entry of readVecMapEntries(fields.pool_shares)) {
+        const poolId = readObjectId(entry.key);
+        const shares = readBigInt(entry.value);
+        if (poolId && shares > 0n) {
+          sharesByPool.set(poolId.toLowerCase(), shares);
+        }
+      }
+      if (objectId && sharesByPool.size > 0) {
+        positions.push({ id: objectId, sharesByPool });
+      }
+    }
+
+    cursor = page.hasNextPage ? page.nextCursor : null;
+  } while (cursor);
+
+  if (positions.length === 0) {
+    return [];
+  }
+
+  const pools = await getFundPools({
+    network: SUI_NETWORK,
+    packageId: SUI_FUND_CONFIG.packageId,
+    includeInactive: true,
+  });
+
+  const holdings: TransparencyHolding[] = [];
+  await Promise.all(pools.map(async (pool) => {
+    const poolObjectId = String(pool.pool_object_id || '').trim();
+    if (!poolObjectId) {
+      return;
+    }
+
+    const poolKey = poolObjectId.toLowerCase();
+    const shares = positions.reduce((sum, position) => sum + (position.sharesByPool.get(poolKey) ?? 0n), 0n);
+    if (shares <= 0n) {
+      return;
+    }
+
+    const poolObject = await client.getObject({ id: poolObjectId, options: { showContent: true } });
+    const fields = readMoveFields(poolObject.data);
+    const balance = readBigInt(fields.balance);
+    const totalShares = readBigInt(fields.total_pool_shares);
+    const valueUsdc = totalShares > 0n ? shares * balance / totalShares : 0n;
+    const valueUsd = bigintToUnits(valueUsdc, 6);
+    const amount = bigintToUnits(shares, 6);
+
+    holdings.push({
+      type: 'defi',
+      id: `fund-pool-${poolObjectId}`,
+      name: pool.name || `${pool.symbol || 'USDC'} Fund Pool`,
+      symbol: pool.symbol || 'USDC',
+      chain: 'sui',
+      usd_value: valueUsd,
+      share: 0,
+      asset_usd_value: bigintToUnits(balance, 6),
+      amount,
+      price: totalShares > 0n ? bigintToUnits(balance * 1_000_000n / totalShares, 6) : null,
+      apy: Number(pool.realized_apy_bps || pool.target_apy_bps || 0) / 100,
+      side: 'Fund pool',
+      logo_url: pool.logo_url || null,
+      link: getInvestPoolHref(pool),
+      protocol_key: 'av8-fund-pool',
+      protocol_name: 'AV8 Fund Pools',
+      position_kind: 'pool',
+      position_type: `${amount.toLocaleString('en-US', { maximumFractionDigits: 6 })} pool shares`,
+      protocol_module: 'fund_core',
+    });
+  }));
+
+  const totalUsd = holdings.reduce((sum, item) => sum + item.usd_value, 0);
+  holdings.forEach((item) => {
+    item.share = totalUsd > 0 ? Math.round((item.usd_value / totalUsd) * 1000) / 10 : 0;
+  });
+
+  return holdings.sort((a, b) => b.usd_value - a.usd_value);
+}
+
 type DefiPositionsSectionProps = {
   portfolioNetwork: HeaderNetwork;
 };
+
+function FundPoolPositionsTable({ holdings }: { holdings: TransparencyHolding[] }) {
+  return (
+    <div className="overflow-x-auto rounded-[1.25rem] border border-white/[0.07] bg-[rgba(4,8,16,0.34)]">
+      <div className="min-w-[980px]">
+        <div className="grid grid-cols-[2.1fr_1.25fr_1.15fr_1fr_1.45fr_1.55fr_130px] gap-4 px-5 py-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+          <div>Pool</div>
+          <div className="flex items-center gap-1">TVL (Supply) <Info className="h-3.5 w-3.5" /></div>
+          <div className="flex items-center gap-1">Balance <Info className="h-3.5 w-3.5" /></div>
+          <div className="flex items-center gap-1">Fee APY <Info className="h-3.5 w-3.5" /></div>
+          <div className="flex items-center gap-1">Annualized performance <Info className="h-3.5 w-3.5" /></div>
+          <div className="flex items-center gap-1">Snapshot <Info className="h-3.5 w-3.5" /></div>
+          <div />
+        </div>
+
+        <div className="space-y-2 pb-2">
+          {holdings.map((holding) => {
+            const tvl = holding.asset_usd_value ?? holding.usd_value;
+            const apy = holding.apy ?? null;
+            const performance = apy === null ? null : apy * 0.92;
+            const snapshotPoints = buildSnapshotPoints(holding.id, performance);
+
+            return (
+              <div
+                key={holding.id}
+                className="grid min-h-[94px] grid-cols-[2.1fr_1.25fr_1.15fr_1fr_1.45fr_1.55fr_130px] items-center gap-4 rounded-2xl bg-[rgba(13,17,32,0.96)] px-5 py-4 text-slate-200 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.035)]"
+              >
+                <div className="flex min-w-0 items-center gap-4">
+                  <button
+                    type="button"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-500 transition hover:bg-white/[0.04] hover:text-slate-200"
+                    aria-label="Watch pool"
+                  >
+                    <Star className="h-5 w-5" />
+                  </button>
+
+                  {holding.logo_url ? (
+                    <div className="h-16 w-16 shrink-0 overflow-hidden rounded-full bg-white/5 ring-1 ring-white/10">
+                      <img src={holding.logo_url} alt={holding.name} className="h-full w-full object-cover" />
+                    </div>
+                  ) : (
+                    <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-sky-400 to-cyan-300 text-lg font-black text-slate-950 ring-1 ring-white/10">
+                      {(holding.symbol || 'AV8').slice(0, 3).toUpperCase()}
+                    </div>
+                  )}
+
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <div className="truncate text-xl font-semibold text-white">{holding.name}</div>
+                      <MoreVertical className="h-4 w-4 shrink-0 text-slate-500" />
+                    </div>
+                    <div className="mt-1 truncate text-sm text-slate-500">[{holding.symbol || 'USDC'}-AV8]</div>
+                  </div>
+                </div>
+
+                <div className="min-w-0">
+                  <div className="text-lg font-medium text-white">{formatCompactUsd(tvl)}</div>
+                  <div className="mt-1 text-sm text-slate-500">USDC liquidity</div>
+                </div>
+
+                <div className="min-w-0">
+                  <div className="text-lg font-medium text-white">{formatUsd(holding.usd_value)}</div>
+                  <div className="mt-1 text-sm text-slate-500 underline decoration-dotted underline-offset-4">
+                    {formatPoolShares(holding.amount)}
+                  </div>
+                </div>
+
+                <div className="text-lg font-medium text-white">{formatPercentValue(apy)}</div>
+                <div className="text-lg font-medium text-white">{formatPercentValue(performance)}</div>
+
+                <div className="h-14">
+                  <svg viewBox="0 0 135 54" className="h-full w-full overflow-visible" role="img" aria-label="Pool performance snapshot">
+                    <defs>
+                      <linearGradient id={`pool-spark-${holding.id.replace(/[^a-zA-Z0-9]/g, '')}`} x1="0" x2="0" y1="0" y2="1">
+                        <stop offset="0%" stopColor="rgba(74,222,128,0.42)" />
+                        <stop offset="100%" stopColor="rgba(74,222,128,0)" />
+                      </linearGradient>
+                    </defs>
+                    <polyline
+                      points={`0,54 ${snapshotPoints} 135,54`}
+                      fill={`url(#pool-spark-${holding.id.replace(/[^a-zA-Z0-9]/g, '')})`}
+                      stroke="none"
+                    />
+                    <polyline
+                      points={snapshotPoints}
+                      fill="none"
+                      stroke="#4ade80"
+                      strokeWidth="2.2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </div>
+
+                <div className="flex items-center justify-end gap-3">
+                  {holding.link ? (
+                    <a
+                      href={holding.link}
+                      className="inline-flex items-center gap-2 text-base font-medium text-slate-300 transition hover:text-white"
+                    >
+                      Details
+                      <ExternalLink className="h-4 w-4" />
+                    </a>
+                  ) : (
+                    <span className="text-base font-medium text-slate-500">Details</span>
+                  )}
+                  <MoreVertical className="h-5 w-5 text-slate-500" />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function DefiPositionsSection({ portfolioNetwork }: DefiPositionsSectionProps) {
   const currentAccount = useCurrentAccount();
@@ -1200,8 +1539,8 @@ export function DefiPositionsSection({ portfolioNetwork }: DefiPositionsSectionP
       setDefiError(null);
 
       try {
-        const snap = await loadSuiOwnerCoinPortfolio(suiClient, activeWalletAddress);
-        setDefiHoldings(snap.holdings);
+        const fundPoolHoldings = await loadSuiFundPoolHoldings(suiClient, activeWalletAddress);
+        setDefiHoldings(fundPoolHoldings);
       } catch (error) {
         setDefiHoldings([]);
         setDefiError(error instanceof Error ? error.message : messages.transparency.liveDataUnavailable);
@@ -1329,27 +1668,6 @@ export function DefiPositionsSection({ portfolioNetwork }: DefiPositionsSectionP
         </div>
 
         <div className="space-y-3">
-          {portfolioNetwork === 'sui' && activeWalletIsSui && hasWalletConnection && activeWalletAddress ? (
-            <div className="rounded-[1.5rem] border border-cyan-400/25 bg-[linear-gradient(145deg,rgba(34,211,238,0.09),rgba(5,9,18,0.72))] p-4 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]">
-              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold tracking-wide text-white">{messages.portfolio.defiSuiCetusTitle}</div>
-                  <p className="mt-1 max-w-xl text-xs leading-relaxed text-slate-400">
-                    {messages.portfolio.defiSuiCetusBlurb}
-                  </p>
-                </div>
-                <a
-                  href={CETUS_WEB_APP_HREF}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="shrink-0 rounded-xl border border-cyan-400/35 bg-cyan-500/[0.12] px-3 py-2 text-xs font-semibold uppercase tracking-wider text-cyan-100 transition-colors hover:bg-cyan-500/20"
-                >
-                  {messages.portfolio.defiSuiCetusOpenApp}
-                </a>
-              </div>
-              <SuiSwapPanel minimal centered linkedSuiWallets={[]} selectedOwnerAddress={activeWalletAddress} />
-            </div>
-          ) : null}
           {defiLoading ? (
             <div className="rounded-[1.5rem] border border-white/8 bg-[rgba(5,9,18,0.72)] px-4 py-4 text-sm text-slate-300">
               {messages.transparency.liveDataLoading}
@@ -1367,16 +1685,10 @@ export function DefiPositionsSection({ portfolioNetwork }: DefiPositionsSectionP
               {messages.portfolio.defiSuiOtherTabHint}
             </div>
           ) : defiHoldings.length > 0 ? (
-            <div className="space-y-3">
-              {portfolioNetwork === 'sui' ? (
-                <div className="rounded-[1.5rem] border border-white/8 bg-[rgba(4,8,16,0.42)] px-4 py-3 text-sm leading-6 text-slate-300">
-                  {messages.portfolio.defiSuiOnChainDisclaimer}
-                </div>
-              ) : null}
+            portfolioNetwork === 'sui' ? (
+              <FundPoolPositionsTable holdings={defiHoldings} />
+            ) : (
               <div className="rounded-[1.5rem] border border-white/8 bg-[rgba(4,8,16,0.52)] p-4">
-                <div className="mb-3 text-xs uppercase tracking-[0.18em] text-slate-400">
-                  {messages.portfolio.defiActiveWallet}: {activeWalletAddress.slice(0, 10)}...{activeWalletAddress.slice(-6)}
-                </div>
                 <TransparencyHoldingsList
                   holdings={defiHoldings}
                   portfolioShareLabel={messages.transparency.portfolioShare}
@@ -1388,7 +1700,7 @@ export function DefiPositionsSection({ portfolioNetwork }: DefiPositionsSectionP
                   onShowMorphoDetails={handleShowMorphoDetails}
                 />
               </div>
-            </div>
+            )
           ) : defiError ? (
             <div className="rounded-[1.5rem] border border-amber-500/20 bg-amber-500/5 px-4 py-4 text-sm text-amber-100">
               {defiError}

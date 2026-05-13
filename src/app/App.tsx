@@ -24,6 +24,7 @@ const TermsOfServicePage = React.lazy(() => import('./components/TermsOfServiceP
 const AboutPage = React.lazy(() => import('./components/AboutPage').then((module) => ({ default: module.AboutPage })));
 const TokenAdminPage = React.lazy(() => import('./components/TokenAdminPage').then((module) => ({ default: module.TokenAdminPage })));
 const PoolAdminPage = React.lazy(() => import('./components/PoolAdminPage').then((module) => ({ default: module.PoolAdminPage })));
+const FundSettingsPage = React.lazy(() => import('./components/FundSettingsPage').then((module) => ({ default: module.FundSettingsPage })));
 
 type AppRoute =
   | { page: 'home' }
@@ -41,7 +42,8 @@ type AppRoute =
   | { page: 'terms-of-service' }
   | { page: 'kyc-aml' }
   | { page: 'token-admin' }
-  | { page: 'pool-admin' };
+  | { page: 'pool-admin' }
+  | { page: 'admin-settings' };
 
 function resolveRoute(): AppRoute {
   if (typeof window === 'undefined') {
@@ -114,6 +116,10 @@ function resolveRoute(): AppRoute {
 
   if (/(?:\/admin\/pools|\/pools)$/.test(normalizedPathname)) {
     return { page: 'pool-admin' };
+  }
+
+  if (/(?:\/admin\/settings|\/settings)$/.test(normalizedPathname)) {
+    return { page: 'admin-settings' };
   }
 
   return { page: 'home' };
@@ -244,6 +250,8 @@ export default function App() {
                     ? 'Token administration'
                     : route.page === 'pool-admin'
                       ? 'Pool administration'
+                      : route.page === 'admin-settings'
+                        ? 'Settings'
           : messages.article.pageTitle;
     document.title = `${project.name} | ${sectionTitle}`;
   }, [messages.article.pageTitle, messages.blog.pageTitle, messages.invest.pageTitle, messages.kycAml.pageTitle, messages.meta.titleSuffix, messages.mint.pageTitle, messages.navbar.aboutProject, messages.portfolio.pageTitle, messages.privacyPolicy.pageTitle, messages.swap.pageTitle, messages.termsOfService.pageTitle, messages.whitepaper.pageTitle, project.name, route.page]);
@@ -342,6 +350,8 @@ export default function App() {
             <TokenAdminPage />
           ) : route.page === 'pool-admin' ? (
             <PoolAdminPage />
+          ) : route.page === 'admin-settings' ? (
+            <FundSettingsPage />
           ) : (
             <ArticlePage project={localizedProject} articleId={route.articleId} />
           )}

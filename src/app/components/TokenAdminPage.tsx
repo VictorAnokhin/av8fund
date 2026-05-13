@@ -118,6 +118,21 @@ function bpsToPercent(value: number): string {
   return `${(Number(value || 0) / 100).toFixed(2)}%`;
 }
 
+function estimateActiveWeightBps(tokens: FundTokenRecord[], form: TokenFormState, editingId: number | null): number {
+  const formCoinType = form.coinType.trim();
+  const savedHasSui = tokens.some((token) => token.coin_type.trim() === SUI_COIN_TYPE);
+  const implicitSuiWeight = savedHasSui || formCoinType === SUI_COIN_TYPE ? 0 : 10000;
+  const savedWeight = tokens.reduce((total, token) => {
+    if (!token.enabled || token.id === editingId || token.coin_type.trim() === formCoinType) {
+      return total;
+    }
+
+    return total + Number(token.target_weight_bps || 0);
+  }, implicitSuiWeight);
+
+  return savedWeight + (form.enabled ? Number(form.targetWeightBps || 0) : 0);
+}
+
 function recordToForm(record: FundTokenRecord): TokenFormState {
   return {
     network: record.network,
@@ -421,6 +436,10 @@ export function TokenAdminPage() {
     try {
       assertAdminReady();
       assertFundOwnerCapReady();
+
+      if (estimateActiveWeightBps(tokens, form, editingId) > 10000) {
+        throw new Error(t.errors.totalWeightsTooHigh);
+      }
 
       const tx = new Transaction();
       tx.moveCall({
