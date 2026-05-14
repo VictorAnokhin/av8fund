@@ -2,7 +2,7 @@ export function getBasePath(pathname?: string): string {
   const rawPath = pathname ?? (typeof window !== 'undefined' ? window.location.pathname : '/')
   return (
     rawPath.replace(
-      /\/(?:articles(?:\/[^/]+)?|swap|mint|invest(?:\/[^/]+)?|portfolio|fund-accounts|fund-basket|about|whitepaper|privacy-policy|terms-of-service|kyc-aml|admin\/tokens|admin\/pools|admin\/settings|tokens|pools|settings)\/?$/,
+      /\/(?:articles(?:\/[^/]+)?|swap|mint|invest(?:\/[^/]+)?|portfolio|fund-accounts|fund-basket|about|whitepaper|privacy-policy|terms-of-service|kyc-aml|admin\/tokens|admin\/pools(?:\/[^/]+)?|admin\/settings|tokens|pools(?:\/[^/]+)?|settings)\/?$/,
       '',
     ) || '/'
   )
@@ -80,6 +80,10 @@ export function getTokenAdminPath(basePath?: string): string {
 export function getPoolAdminPath(basePath?: string): string {
   const root = getBasePath(basePath)
   return root === '/' ? '/admin/pools' : `${root}/admin/pools`
+}
+
+export function getPoolAdminDetailPath(poolId: number | string, basePath?: string): string {
+  return `${getPoolAdminPath(basePath)}/${encodeURIComponent(String(poolId))}`
 }
 
 export function getAdminSettingsPath(basePath?: string): string {

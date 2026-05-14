@@ -1,7 +1,7 @@
 import React from 'react';
 import { ConnectButton, useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from '@mysten/dapp-kit';
 import { Transaction } from '@mysten/sui/transactions';
-import { ArrowDownToLine, ArrowUpFromLine, Database, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { ArrowDown, Database, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 
 import { SUI_NETWORK } from '../config';
 import {
@@ -13,7 +13,7 @@ import {
   type FundPoolRecord,
   type RwaAdminCapRecord,
 } from '../lib/api';
-import { getBasePath } from '../lib/routes';
+import { getBasePath, getPoolAdminDetailPath, getPoolAdminPath } from '../lib/routes';
 import { SUI_FUND_CONFIG } from '../lib/suiFund';
 import { PageBreadcrumbsBar, PageHeroBadge, PageHeroShell } from './PageChrome';
 
@@ -22,11 +22,24 @@ const inputClass =
 const textareaClass =
   'min-h-24 w-full resize-y rounded-xl border border-white/[0.09] bg-white/[0.04] px-3 py-3 text-sm leading-6 text-slate-100 outline-none transition focus:border-teal-300/40 focus:bg-white/[0.07]';
 const USDC_DECIMALS = 6;
+const AV8_DECIMALS = 9;
 const MAX_BPS = 10_000;
+
+type PoolAdminPageProps = {
+  poolId?: string;
+};
 
 type CoinLike = {
   coinObjectId: string;
   balance: string;
+};
+
+type LiquidityBalances = {
+  poolBalance: bigint | null;
+  accountingDeployed: bigint | null;
+  vaultBalance: bigint | null;
+  walletBalance: bigint | null;
+  walletAddress: string;
 };
 
 const EMPTY_FORM: FundPoolInput = {
@@ -46,6 +59,7 @@ const EMPTY_FORM: FundPoolInput = {
   targetApyBps: 1200,
   realizedApyBps: 0,
   minDepositUsdc: '1000000',
+  minAv8Balance: '0',
   maxWeightBps: 5000,
   active: true,
   logoUrl: 'https://assets.coingecko.com/coins/images/6319/large/usdc.png',
@@ -60,6 +74,25 @@ function normalizeAddress(value?: string | null): string {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+}
+
+function readBigInt(value: unknown): bigint {
+  if (typeof value === 'bigint') {
+    return value;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return BigInt(Math.trunc(value));
+  }
+  if (typeof value === 'string' && /^\d+$/.test(value)) {
+    return BigInt(value);
+  }
+
+  const fields = asRecord(value).fields;
+  if (fields) {
+    return readBigInt(asRecord(fields).value);
+  }
+
+  return 0n;
 }
 
 function shortId(value: string): string {
@@ -77,17 +110,25 @@ function assertBps(value: number, label: string) {
 }
 
 function parseUsdcAmount(value: string): string | null {
+  return parseTokenAmount(value, USDC_DECIMALS);
+}
+
+function parseAv8Amount(value: string): string | null {
+  return parseTokenAmount(value, AV8_DECIMALS);
+}
+
+function parseTokenAmount(value: string, decimals: number): string | null {
   const normalized = value.trim().replace(',', '.');
   if (!/^\d+(\.\d+)?$/.test(normalized)) {
     return null;
   }
 
   const [whole, fraction = ''] = normalized.split('.');
-  if (fraction.length > USDC_DECIMALS) {
+  if (fraction.length > decimals) {
     return null;
   }
 
-  const units = BigInt(whole || '0') * 10n ** BigInt(USDC_DECIMALS) + BigInt((fraction.padEnd(USDC_DECIMALS, '0') || '0'));
+  const units = BigInt(whole || '0') * 10n ** BigInt(decimals) + BigInt((fraction.padEnd(decimals, '0') || '0'));
   return units.toString();
 }
 
@@ -125,15 +166,35 @@ function buildCoinArgument(tx: Transaction, coins: CoinLike[], amount: bigint) {
 }
 
 function formatUsdcUnits(value: string): string {
+  return formatTokenUnits(value, USDC_DECIMALS);
+}
+
+function formatAv8Units(value: string): string {
+  return formatTokenUnits(value, AV8_DECIMALS);
+}
+
+function formatTokenUnits(value: string, decimals: number): string {
   if (!/^\d+$/.test(value || '')) {
     return '';
   }
 
   const units = BigInt(value);
-  const base = 10n ** BigInt(USDC_DECIMALS);
+  const base = 10n ** BigInt(decimals);
   const whole = units / base;
-  const fraction = (units % base).toString().padStart(USDC_DECIMALS, '0').replace(/0+$/, '');
+  const fraction = (units % base).toString().padStart(decimals, '0').replace(/0+$/, '');
   return `${whole.toString()}${fraction ? `.${fraction}` : ''}`;
+}
+
+function formatUsdcBalance(value: bigint | null): string {
+  return value === null ? 'не доступно' : `${formatUsdcUnits(value.toString()) || '0'} USDC`;
+}
+
+function readObjectBalance(objectData: unknown, field = 'balance'): bigint | null {
+  const fields = asRecord(asRecord(asRecord(objectData).content).fields);
+  if (!(field in fields)) {
+    return null;
+  }
+  return readBigInt(fields[field]);
 }
 
 function recordToForm(record: FundPoolRecord): FundPoolInput {
@@ -154,6 +215,7 @@ function recordToForm(record: FundPoolRecord): FundPoolInput {
     targetApyBps: record.target_apy_bps,
     realizedApyBps: record.realized_apy_bps,
     minDepositUsdc: record.min_deposit_usdc,
+    minAv8Balance: record.min_av8_balance || '0',
     maxWeightBps: record.max_weight_bps,
     active: record.active,
     logoUrl: record.logo_url,
@@ -200,8 +262,9 @@ function extractCreatedPoolAccountingId(result: unknown): string {
   return String(accountingChange.objectId || '');
 }
 
-export function PoolAdminPage() {
+export function PoolAdminPage({ poolId }: PoolAdminPageProps) {
   const homeHref = getBasePath();
+  const poolsHref = getPoolAdminPath();
   const account = useCurrentAccount();
   const client = useSuiClient();
   const { mutateAsync: signAndExecuteTransaction } = useSignAndExecuteTransaction();
@@ -211,6 +274,7 @@ export function PoolAdminPage() {
   const [adminCaps, setAdminCaps] = React.useState<RwaAdminCapRecord[]>([]);
   const [form, setForm] = React.useState<FundPoolInput>(EMPTY_FORM);
   const [minDepositUsdcInput, setMinDepositUsdcInput] = React.useState(() => formatUsdcUnits(EMPTY_FORM.minDepositUsdc));
+  const [minAv8BalanceInput, setMinAv8BalanceInput] = React.useState(() => formatAv8Units(EMPTY_FORM.minAv8Balance));
   const [editingId, setEditingId] = React.useState<number | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [busy, setBusy] = React.useState<string | null>(null);
@@ -220,17 +284,46 @@ export function PoolAdminPage() {
   const [liquidityPoolId, setLiquidityPoolId] = React.useState('');
   const [liquidityAmount, setLiquidityAmount] = React.useState('');
   const [liquidityRecipient, setLiquidityRecipient] = React.useState('');
+  const [liquidityBalances, setLiquidityBalances] = React.useState<LiquidityBalances | null>(null);
+  const [liquidityBalancesLoading, setLiquidityBalancesLoading] = React.useState(false);
+  const [liquidityDirection, setLiquidityDirection] = React.useState<'pool-to-vault' | 'vault-to-pool'>('pool-to-vault');
+  const [sidePanelTab, setSidePanelTab] = React.useState<'form' | 'liquidity'>('form');
+
+  const detailMode = poolId !== undefined;
+  const isNewPoolPage = poolId === 'new';
+  const selectedDetailPool = React.useMemo(() => {
+    if (!poolId || isNewPoolPage) {
+      return null;
+    }
+    const normalizedPoolId = normalizeAddress(poolId);
+    return pools.find((pool) => String(pool.id) === poolId || normalizeAddress(pool.pool_object_id) === normalizedPoolId) || null;
+  }, [isNewPoolPage, poolId, pools]);
 
   const selectedLiquidityPool = React.useMemo(() => {
-    return pools.find((pool) => pool.pool_object_id === liquidityPoolId)
+    return selectedDetailPool
+      || pools.find((pool) => pool.pool_object_id === liquidityPoolId)
       || pools.find((pool) => pool.pool_object_id === form.poolObjectId)
       || null;
-  }, [form.poolObjectId, liquidityPoolId, pools]);
+  }, [form.poolObjectId, liquidityPoolId, pools, selectedDetailPool]);
 
   const hasAdminAccess = React.useMemo(
     () => Boolean(adminAddress && adminCaps.some((cap) => normalizeAddress(cap.owner_address) === adminAddress)),
     [adminAddress, adminCaps],
   );
+  const poolLiquidityLabel = selectedLiquidityPool
+    ? `${selectedLiquidityPool.name} (${shortId(selectedLiquidityPool.pool_object_id)})`
+    : 'Пул не выбран';
+  const vaultLiquidityLabel = selectedLiquidityPool
+    ? `${selectedLiquidityPool.name} (${selectedLiquidityPool.basket_vault_id ? shortId(selectedLiquidityPool.basket_vault_id) : 'vault не привязан'})`
+    : 'Контейнер не выбран';
+  const poolLiquidityBalance = liquidityBalancesLoading ? '...' : formatUsdcBalance(liquidityBalances?.poolBalance ?? null);
+  const vaultLiquidityBalance = liquidityBalancesLoading ? '...' : formatUsdcBalance(liquidityBalances?.vaultBalance ?? null);
+  const liquidityTop = liquidityDirection === 'pool-to-vault'
+    ? { title: 'Текущий пул', label: poolLiquidityLabel, balance: poolLiquidityBalance }
+    : { title: 'Связанный контейнер', label: vaultLiquidityLabel, balance: vaultLiquidityBalance };
+  const liquidityBottom = liquidityDirection === 'pool-to-vault'
+    ? { title: 'Связанный контейнер', label: vaultLiquidityLabel, balance: vaultLiquidityBalance }
+    : { title: 'Текущий пул', label: poolLiquidityLabel, balance: poolLiquidityBalance };
 
   async function load() {
     setLoading(true);
@@ -253,6 +346,81 @@ export function PoolAdminPage() {
     void load();
   }, []);
 
+  React.useEffect(() => {
+    if (!detailMode) {
+      return;
+    }
+
+    if (isNewPoolPage) {
+      setEditingId(null);
+      setForm(EMPTY_FORM);
+      setMinDepositUsdcInput(formatUsdcUnits(EMPTY_FORM.minDepositUsdc));
+      setMinAv8BalanceInput(formatAv8Units(EMPTY_FORM.minAv8Balance));
+      setLiquidityPoolId('');
+      setSidePanelTab('form');
+      return;
+    }
+
+    if (!selectedDetailPool) {
+      return;
+    }
+
+    setEditingId(selectedDetailPool.id);
+    setForm(recordToForm(selectedDetailPool));
+    setMinDepositUsdcInput(formatUsdcUnits(selectedDetailPool.min_deposit_usdc));
+    setMinAv8BalanceInput(formatAv8Units(selectedDetailPool.min_av8_balance || '0'));
+    setLiquidityPoolId(selectedDetailPool.pool_object_id);
+  }, [detailMode, isNewPoolPage, selectedDetailPool]);
+
+  React.useEffect(() => {
+    let active = true;
+
+    async function loadLiquidityBalances() {
+      const pool = selectedLiquidityPool;
+      if (!pool?.pool_object_id) {
+        setLiquidityBalances(null);
+        return;
+      }
+
+      const walletAddress = normalizeAddress(liquidityRecipient || pool.liquidity_wallet_address || account?.address || '');
+      setLiquidityBalancesLoading(true);
+      try {
+        const [poolObject, accountingObject, vaultObject, walletCoins] = await Promise.all([
+          client.getObject({ id: pool.pool_object_id, options: { showContent: true } }).catch(() => null),
+          pool.pool_accounting_id
+            ? client.getObject({ id: pool.pool_accounting_id, options: { showContent: true } }).catch(() => null)
+            : Promise.resolve(null),
+          pool.basket_vault_id
+            ? client.getObject({ id: pool.basket_vault_id, options: { showContent: true } }).catch(() => null)
+            : Promise.resolve(null),
+          walletAddress ? fetchAllCoins(client, walletAddress, pool.coin_type).catch(() => []) : Promise.resolve([]),
+        ]);
+
+        if (!active) {
+          return;
+        }
+
+        setLiquidityBalances({
+          poolBalance: poolObject?.data ? readObjectBalance(poolObject.data, 'balance') : null,
+          accountingDeployed: accountingObject?.data ? readObjectBalance(accountingObject.data, 'deployed_balance_usdc') : null,
+          vaultBalance: vaultObject?.data ? readObjectBalance(vaultObject.data, 'balance') : null,
+          walletBalance: walletCoins.reduce((sum, coin) => sum + BigInt(coin.balance), 0n),
+          walletAddress,
+        });
+      } finally {
+        if (active) {
+          setLiquidityBalancesLoading(false);
+        }
+      }
+    }
+
+    void loadLiquidityBalances();
+
+    return () => {
+      active = false;
+    };
+  }, [account?.address, client, lastDigest, liquidityRecipient, selectedLiquidityPool?.basket_vault_id, selectedLiquidityPool?.coin_type, selectedLiquidityPool?.liquidity_wallet_address, selectedLiquidityPool?.pool_accounting_id, selectedLiquidityPool?.pool_object_id]);
+
   function update<K extends keyof FundPoolInput>(key: K, value: FundPoolInput[K]) {
     setForm((current) => ({ ...current, [key]: value }));
   }
@@ -262,6 +430,10 @@ export function PoolAdminPage() {
     if (minDepositUnits === null) {
       throw new Error('Минимальный депозит укажите в USDC: например 1, 10.5 или 1,000000.');
     }
+    const minAv8Units = parseAv8Amount(minAv8BalanceInput);
+    if (minAv8Units === null) {
+      throw new Error('Уровень AV8 укажите в AV8: например 100, 1000.5 или 1000,000000001.');
+    }
     assertBps(Number(nextForm.targetApyBps || 0), 'Target APY bps');
     assertBps(Number(nextForm.realizedApyBps || 0), 'Realized APY bps');
     assertBps(Number(nextForm.maxWeightBps || 0), 'Max weight bps');
@@ -269,6 +441,7 @@ export function PoolAdminPage() {
     return {
       ...nextForm,
       minDepositUsdc: minDepositUnits,
+      minAv8Balance: minAv8Units,
     };
   }
 
@@ -319,8 +492,13 @@ export function PoolAdminPage() {
     const saved = await saveFundPool(buildNormalizedForm(nextForm), nextEditingId ?? undefined, { adminAddress });
     setForm(recordToForm(saved));
     setMinDepositUsdcInput(formatUsdcUnits(saved.min_deposit_usdc));
+    setMinAv8BalanceInput(formatAv8Units(saved.min_av8_balance || '0'));
     setEditingId(saved.id);
     await load();
+    if (detailMode && isNewPoolPage) {
+      window.history.pushState({}, '', getPoolAdminDetailPath(saved.id));
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }
     return saved;
   }
 
@@ -458,9 +636,14 @@ export function PoolAdminPage() {
         setEditingId(null);
         setForm(EMPTY_FORM);
         setMinDepositUsdcInput(formatUsdcUnits(EMPTY_FORM.minDepositUsdc));
+        setMinAv8BalanceInput(formatAv8Units(EMPTY_FORM.minAv8Balance));
       }
       await load();
       setNotice('Запись пула удалена из БД. On-chain объект не удаляется.');
+      if (detailMode && selectedDetailPool?.id === id) {
+        window.history.pushState({}, '', poolsHref);
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -629,6 +812,15 @@ export function PoolAdminPage() {
     }
   }
 
+  async function handleExchangePoolVaultLiquidity() {
+    if (liquidityDirection === 'pool-to-vault') {
+      await handleSendPoolLiquidityToVault();
+      return;
+    }
+
+    await handleReturnPoolLiquidityFromVault();
+  }
+
   async function handleCreatePoolAccounting() {
     setBusy('create-accounting');
     setError(null);
@@ -688,186 +880,150 @@ export function PoolAdminPage() {
   return (
     <main className="min-h-[calc(100vh-160px)] bg-slate-950 pb-20 pt-14">
       <PageBreadcrumbsBar
-        items={[
-          { label: 'Home', href: homeHref },
-          { label: 'Pool admin' },
-        ]}
+        items={detailMode
+          ? [
+              { label: 'Home', href: homeHref },
+              { label: 'Pool admin', href: poolsHref },
+              { label: isNewPoolPage ? 'New pool' : selectedDetailPool?.name || 'Pool' },
+            ]
+          : [
+              { label: 'Home', href: homeHref },
+              { label: 'Pool admin' },
+            ]}
       />
-      <PageHeroShell
-        badge={<PageHeroBadge label="Admin" variant="teal" />}
-        title="Управление пулами"
-        subtitle="Создание on-chain Pool<USDC>, обновление APY/лимитов/активности и синхронизация object IDs с backend."
-        subtitleClassName="max-w-4xl text-lg leading-relaxed text-slate-400"
-      />
+      {isNewPoolPage ? (
+        <PageHeroShell
+          badge={<PageHeroBadge label="Admin" variant="teal" />}
+          title="Создание пула"
+          subtitleClassName="max-w-4xl text-lg leading-relaxed text-slate-400"
+        />
+      ) : (
+        <PageHeroShell
+          badge={<PageHeroBadge label="Admin" variant="teal" />}
+          title={detailMode ? selectedDetailPool?.name || 'Пул' : 'Управление пулами'}
+          subtitle={detailMode
+            ? 'Редактирование параметров пула и обмен ликвидностью между Pool, AssetVault и внешним рабочим кошельком.'
+            : 'Реестр пулов фонда. В строке пула открывается карточка с настройками и управлением ликвидностью.'}
+          subtitleClassName="max-w-4xl text-lg leading-relaxed text-slate-400"
+        />
+      )}
 
       <section className="px-6 py-10">
-        <div className="mx-auto grid max-w-7xl gap-6 xl:grid-cols-[1fr_420px]">
+        <div className="mx-auto max-w-7xl">
           <div className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="text-sm uppercase tracking-[0.18em] text-teal-200">Реестр пулов</div>
-                <p className="mt-2 text-sm text-slate-400">Backend хранит настройки и object id, Sui хранит сам shared pool.</p>
-              </div>
-              <button
-                className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-slate-100 transition hover:border-teal-300/40"
-                onClick={() => void load()}
-                disabled={loading}
-              >
-                <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Обновить
-              </button>
-            </div>
-
-            <div className="overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.035]">
-              <div className="grid grid-cols-[1.4fr_0.65fr_0.65fr_1fr_120px] gap-3 border-b border-white/[0.07] px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
-                <div>Пул</div>
-                <div>Risk</div>
-                <div>APY</div>
-                <div>Object</div>
-                <div className="text-right">Действия</div>
-              </div>
-              {pools.length === 0 ? (
-                <div className="px-4 py-8 text-sm text-slate-400">Пулы еще не заведены.</div>
-              ) : pools.map((pool) => (
-                <div key={pool.id} className="grid grid-cols-[1.4fr_0.65fr_0.65fr_1fr_120px] gap-3 border-b border-white/[0.05] px-4 py-4 text-sm text-slate-200 last:border-b-0">
-                  <div className="min-w-0">
-                    <div className="truncate font-semibold text-white">{pool.name}</div>
-                    <div className="mt-1 truncate text-xs text-slate-500">{pool.symbol} · {shortId(pool.coin_type)}</div>
+            {!detailMode ? (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm uppercase tracking-[0.18em] text-teal-200">Реестр пулов</div>
+                    <p className="mt-2 text-sm text-slate-400">Схема связи: Pool → Object ID AssetVault → внешний рабочий кошелек.</p>
                   </div>
-                  <div>{pool.risk_level}</div>
-                  <div>{bpsToPercent(pool.target_apy_bps)}</div>
-                  <div className="truncate font-mono text-xs text-slate-500">{pool.pool_object_id ? shortId(pool.pool_object_id) : 'not created'}</div>
-                  <div className="flex justify-end gap-2">
-                    <button
-                      className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-slate-100"
-                      onClick={() => {
-                        setEditingId(pool.id);
-                        setForm(recordToForm(pool));
-                        setMinDepositUsdcInput(formatUsdcUnits(pool.min_deposit_usdc));
-                        setLiquidityPoolId(pool.pool_object_id);
-                      }}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <a
+                      className="inline-flex h-10 items-center gap-2 rounded-xl bg-teal-300 px-4 text-sm font-semibold text-slate-950 transition hover:bg-teal-200"
+                      href={getPoolAdminDetailPath('new')}
                     >
-                      Edit
-                    </button>
+                      <Plus className="h-4 w-4" /> Новый пул
+                    </a>
                     <button
-                      className="rounded-lg border border-red-300/20 bg-red-400/[0.08] px-3 py-2 text-xs font-semibold text-red-100"
-                      onClick={() => void handleDelete(pool.id)}
-                      disabled={Boolean(busy)}
+                      className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-4 text-sm font-semibold text-slate-100 transition hover:border-teal-300/40"
+                      onClick={() => void load()}
+                      disabled={loading}
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
+                      <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /> Обновить
                     </button>
                   </div>
                 </div>
-              ))}
-            </div>
 
-            <div className="rounded-2xl border border-white/[0.08] bg-white/[0.035] p-5">
-              <div className="flex flex-col gap-2 border-b border-white/[0.07] pb-4 sm:flex-row sm:items-end sm:justify-between">
-                <div>
-                  <div className="text-sm font-semibold uppercase tracking-[0.18em] text-teal-200">Операционная ликвидность</div>
-                  <div className="mt-1 text-sm leading-6 text-slate-500">
-                    Перенос USDC из смарт-контракта пула в рабочий кошелек и возврат обратно в пул.
-                  </div>
-                </div>
-                <div className="text-xs text-slate-500">PoolAdminCap</div>
-              </div>
-
-              <div className="mt-5 grid gap-4 lg:grid-cols-[1.2fr_0.7fr_1.2fr_auto]">
-                <Field label="Пул">
-                  <select
-                    className={inputClass}
-                    value={selectedLiquidityPool?.pool_object_id || liquidityPoolId}
-                    onChange={(event) => setLiquidityPoolId(event.target.value)}
-                  >
-                    <option value="">Выберите пул</option>
-                    {pools.filter((pool) => pool.pool_object_id).map((pool) => (
-                      <option key={pool.id} value={pool.pool_object_id}>
-                        {pool.name} · {shortId(pool.pool_object_id)}
-                      </option>
+                <div className="overflow-x-auto rounded-2xl border border-white/[0.08] bg-white/[0.035]">
+                  <div className="min-w-[1040px]">
+                    <div className="grid grid-cols-[1.35fr_0.85fr_0.95fr_1.65fr_110px] gap-4 border-b border-white/[0.07] px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                      <div>Пул</div>
+                      <div>Параметры</div>
+                      <div>Доходность</div>
+                      <div>On-chain связи</div>
+                      <div className="text-right">Действия</div>
+                    </div>
+                    {pools.length === 0 ? (
+                      <div className="px-4 py-8 text-sm text-slate-400">Пулы еще не заведены.</div>
+                    ) : pools.map((pool) => (
+                      <div key={pool.id} className="grid grid-cols-[1.35fr_0.85fr_0.95fr_1.65fr_110px] items-center gap-4 border-b border-white/[0.05] px-4 py-4 text-sm text-slate-200 transition hover:bg-white/[0.025] last:border-b-0">
+                        <div className="min-w-0">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <a className="truncate text-base font-semibold text-white transition hover:text-teal-200" href={getPoolAdminDetailPath(pool.id)}>
+                              {pool.name}
+                            </a>
+                            <span className={pool.active ? 'rounded-full border border-emerald-300/20 bg-emerald-300/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-emerald-100' : 'rounded-full border border-slate-300/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400'}>
+                              {pool.active ? 'active' : 'paused'}
+                            </span>
+                          </div>
+                          <div className="mt-1 truncate text-xs text-slate-500">{pool.symbol} · {shortId(pool.coin_type)}</div>
+                          {pool.description ? <div className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">{pool.description}</div> : null}
+                        </div>
+                        <div className="space-y-2 text-xs">
+                          <div className="inline-flex items-center rounded-lg border border-white/[0.08] bg-black/15 px-2.5 py-1 font-semibold text-slate-200">AV8 {formatAv8Units(pool.min_av8_balance || '0') || '0'}</div>
+                          <div className="text-slate-500">Min: <span className="font-mono text-slate-300">{formatUsdcUnits(pool.min_deposit_usdc) || '0'} USDC</span></div>
+                          <div className="text-slate-500">Max weight: <span className="font-mono text-slate-300">{bpsToPercent(pool.max_weight_bps)}</span></div>
+                        </div>
+                        <div className="space-y-2 text-xs">
+                          <div className="text-slate-500">Target <span className="ml-1 font-mono text-sm font-semibold text-teal-100">{bpsToPercent(pool.target_apy_bps)}</span></div>
+                          <div className="text-slate-500">Realized <span className="ml-1 font-mono text-sm font-semibold text-white">{bpsToPercent(pool.realized_apy_bps)}</span></div>
+                        </div>
+                        <div className="grid gap-1.5 text-[11px]">
+                          <div className="flex items-center justify-between gap-3 rounded-lg bg-black/15 px-2 py-1.5">
+                            <span className="text-slate-500">Pool</span>
+                            <span className="font-mono text-slate-300">{pool.pool_object_id ? shortId(pool.pool_object_id) : 'not created'}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3 rounded-lg bg-black/15 px-2 py-1.5">
+                            <span className="text-slate-500">AssetVault</span>
+                            <span className="font-mono text-slate-300">{pool.basket_vault_id ? shortId(pool.basket_vault_id) : 'нет'}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3 rounded-lg bg-black/15 px-2 py-1.5">
+                            <span className="text-slate-500">Wallet</span>
+                            <span className="font-mono text-slate-300">{pool.liquidity_wallet_address ? shortId(pool.liquidity_wallet_address) : 'не задан'}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-3 rounded-lg bg-black/15 px-2 py-1.5">
+                            <span className="text-slate-500">Accounting</span>
+                            <span className="font-mono text-slate-300">{pool.pool_accounting_id ? shortId(pool.pool_accounting_id) : 'нет'}</span>
+                          </div>
+                        </div>
+                        <div className="flex justify-end gap-2">
+                          <a
+                            className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs font-semibold text-slate-100 transition hover:border-teal-300/40"
+                            href={getPoolAdminDetailPath(pool.id)}
+                          >
+                            Открыть
+                          </a>
+                          <button
+                            className="rounded-lg border border-red-300/20 bg-red-400/[0.08] px-3 py-2 text-xs font-semibold text-red-100"
+                            onClick={() => void handleDelete(pool.id)}
+                            disabled={Boolean(busy)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
                     ))}
-                  </select>
-                </Field>
-                <Field label="Сумма USDC">
-                  <input
-                    className={inputClass}
-                    inputMode="decimal"
-                    value={liquidityAmount}
-                    placeholder="100"
-                    onChange={(event) => setLiquidityAmount(event.target.value.replace(/[^\d.,]/g, ''))}
-                  />
-                </Field>
-                <Field label="Кошелек получателя">
-                  <input
-                    className={`${inputClass} font-mono text-xs`}
-                    value={liquidityRecipient}
-                    placeholder={selectedLiquidityPool?.liquidity_wallet_address || account?.address || '0x...'}
-                    onChange={(event) => setLiquidityRecipient(event.target.value)}
-                  />
-                </Field>
-                <div className="grid gap-2 self-end sm:grid-cols-5 lg:w-[640px]">
-                  <button
-                    type="button"
-                    className="inline-flex h-11 items-center justify-center rounded-xl border border-sky-300/25 bg-sky-300/10 px-4 text-xs font-bold text-sky-100 transition hover:bg-sky-300/15 disabled:opacity-60"
-                    disabled={Boolean(busy)}
-                    onClick={() => void handleCreatePoolAccounting().catch((err) => setError(err instanceof Error ? err.message : String(err)))}
-                  >
-                    Accounting
-                  </button>
-                  <button
-                    type="button"
-                    className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-amber-300/25 bg-amber-300/10 px-4 text-xs font-bold text-amber-100 transition hover:bg-amber-300/15 disabled:opacity-60"
-                    disabled={Boolean(busy)}
-                    onClick={() => void handleSendPoolLiquidityToWallet().catch((err) => setError(err instanceof Error ? err.message : String(err)))}
-                  >
-                    <ArrowUpFromLine className="h-4 w-4" />
-                    В кошелек
-                  </button>
-                  <button
-                    type="button"
-                    className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-teal-300/25 bg-teal-300/10 px-4 text-xs font-bold text-teal-100 transition hover:bg-teal-300/15 disabled:opacity-60"
-                    disabled={Boolean(busy)}
-                    onClick={() => void handleReturnPoolLiquidityFromWallet().catch((err) => setError(err instanceof Error ? err.message : String(err)))}
-                  >
-                    <ArrowDownToLine className="h-4 w-4" />
-                    В пул
-                  </button>
-                  <button
-                    type="button"
-                    className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-violet-300/25 bg-violet-300/10 px-4 text-xs font-bold text-violet-100 transition hover:bg-violet-300/15 disabled:opacity-60"
-                    disabled={Boolean(busy || !selectedLiquidityPool?.pool_accounting_id || !selectedLiquidityPool?.basket_vault_id)}
-                    onClick={() => void handleSendPoolLiquidityToVault().catch((err) => setError(err instanceof Error ? err.message : String(err)))}
-                  >
-                    В vault
-                  </button>
-                  <button
-                    type="button"
-                    className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-fuchsia-300/25 bg-fuchsia-300/10 px-4 text-xs font-bold text-fuchsia-100 transition hover:bg-fuchsia-300/15 disabled:opacity-60"
-                    disabled={Boolean(busy || !selectedLiquidityPool?.pool_accounting_id || !selectedLiquidityPool?.basket_vault_id)}
-                    onClick={() => void handleReturnPoolLiquidityFromVault().catch((err) => setError(err instanceof Error ? err.message : String(err)))}
-                  >
-                    Из vault
-                  </button>
+                  </div>
                 </div>
-              </div>
+              </>
+            ) : (
+              <>
+                <a className="inline-flex text-sm font-semibold text-teal-200 transition hover:text-teal-100" href={poolsHref}>
+                  К пулам
+                </a>
+              </>
+            )}
 
-              {selectedLiquidityPool ? (
-                <div className="mt-4 rounded-xl border border-white/[0.08] bg-black/15 px-3 py-3 text-xs leading-5 text-slate-400">
-                  Coin type: <span className="font-mono text-slate-300">{selectedLiquidityPool.coin_type}</span>
-                  <br />
-                  PoolAccounting: <span className="font-mono text-slate-300">{selectedLiquidityPool.pool_accounting_id ? shortId(selectedLiquidityPool.pool_accounting_id) : 'не создан'}</span>
-                  <br />
-                  Basket vault: <span className="font-mono text-slate-300">{selectedLiquidityPool.basket_vault_id ? shortId(selectedLiquidityPool.basket_vault_id) : 'не привязан'}</span>
-                </div>
-              ) : null}
-            </div>
           </div>
 
-          <aside className="h-fit rounded-2xl border border-white/[0.08] bg-white/[0.045] p-5">
+          {detailMode ? <aside className="mx-auto mt-6 h-fit w-full max-w-5xl rounded-2xl border border-white/[0.08] bg-white/[0.045] p-5 lg:w-4/5">
             <div className="flex items-center gap-3">
               <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-teal-400/10 text-teal-200">
                 <Database className="h-5 w-5" />
               </div>
               <div>
-                <div className="text-lg font-semibold text-white">{editingId ? 'Редактировать пул' : 'Новый пул'}</div>
+                <div className="text-lg font-semibold text-white">{isNewPoolPage ? 'Создание пула' : editingId ? 'Редактировать пул' : 'Новый пул'}</div>
                 <div className="text-sm text-slate-400">{hasAdminAccess ? 'Admin wallet подтвержден' : 'Нужен RWA AdminCap в БД'}</div>
               </div>
             </div>
@@ -876,13 +1032,40 @@ export function PoolAdminPage() {
               <ConnectButton />
             </div>
 
-            <div className="mt-5 grid gap-4">
+            {!isNewPoolPage ? <div className="mt-5 grid grid-cols-2 rounded-xl border border-white/[0.08] bg-black/15 p-1">
+              <button
+                type="button"
+                className={sidePanelTab === 'form'
+                  ? 'h-10 rounded-lg bg-teal-300 text-xs font-bold uppercase tracking-[0.12em] text-slate-950'
+                  : 'h-10 rounded-lg text-xs font-bold uppercase tracking-[0.12em] text-slate-400 transition hover:text-slate-100'}
+                onClick={() => setSidePanelTab('form')}
+              >
+                Редактирование
+              </button>
+              <button
+                type="button"
+                className={sidePanelTab === 'liquidity'
+                  ? 'h-10 rounded-lg bg-teal-300 text-xs font-bold uppercase tracking-[0.12em] text-slate-950'
+                  : 'h-10 rounded-lg text-xs font-bold uppercase tracking-[0.12em] text-slate-400 transition hover:text-slate-100'}
+                onClick={() => setSidePanelTab('liquidity')}
+              >
+                Обмен ликвидностью
+              </button>
+            </div> : null}
+
+            {sidePanelTab === 'form' ? (
+              <>
+            <div className="mt-5 grid gap-4 lg:grid-cols-2">
+              <div className="lg:col-span-2">
               <Field label="Название">
                 <input className={inputClass} value={form.name} onChange={(event) => update('name', event.target.value)} />
               </Field>
+              </div>
+              <div className="lg:col-span-2">
               <Field label="Описание">
                 <textarea className={textareaClass} value={form.description || ''} onChange={(event) => update('description', event.target.value)} />
               </Field>
+              </div>
               <Field label="USDC coin type">
                 <input className={inputClass} value={form.coinType} onChange={(event) => update('coinType', event.target.value)} placeholder="0x...::usdc::USDC" />
               </Field>
@@ -895,12 +1078,15 @@ export function PoolAdminPage() {
               <Field label="Basket vault id для USDC">
                 <input className={inputClass} value={form.basketVaultId || ''} onChange={(event) => update('basketVaultId', event.target.value)} placeholder="AssetVault<USDC> из корзины" />
               </Field>
-              <Field label="Рабочий кошелек ликвидности">
-                <input className={inputClass} value={form.liquidityWalletAddress || ''} onChange={(event) => update('liquidityWalletAddress', event.target.value)} placeholder="0x... если нужен вывод в кошелек" />
-              </Field>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Risk 1-5">
-                  <input className={inputClass} value={form.riskLevel} onChange={(event) => update('riskLevel', Number(event.target.value || 1))} />
+                <Field label="Уровень AV8">
+                  <input
+                    className={inputClass}
+                    inputMode="decimal"
+                    value={minAv8BalanceInput}
+                    placeholder="100"
+                    onChange={(event) => setMinAv8BalanceInput(event.target.value.replace(/[^\d.,]/g, ''))}
+                  />
                 </Field>
                 <Field label="Target APY bps">
                   <input className={inputClass} value={form.targetApyBps} onChange={(event) => update('targetApyBps', Number(event.target.value || 0))} />
@@ -930,34 +1116,135 @@ export function PoolAdminPage() {
               </label>
             </div>
 
-            <div className="mt-5 grid gap-3">
-              <button
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-teal-300 px-4 text-sm font-semibold text-slate-950 transition hover:bg-teal-200 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={Boolean(busy)}
-                onClick={() => void handleCreateOnchain()}
-              >
-                <Plus className="h-4 w-4" /> {busy === 'create-chain' ? 'Создание...' : 'Создать on-chain и сохранить'}
-              </button>
-              <button
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.05] px-4 text-sm font-semibold text-slate-100 transition hover:border-teal-300/40 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={Boolean(busy)}
-                onClick={() => void handleUpdateOnchain()}
-              >
-                <Save className="h-4 w-4" /> {busy === 'update-chain' ? 'Обновление...' : 'Обновить on-chain и БД'}
-              </button>
-              <button
-                className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-sm font-semibold text-slate-300 transition hover:border-teal-300/40 disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={Boolean(busy)}
-                onClick={() => void handleSaveBackendOnly()}
-              >
-                <Database className="h-4 w-4" /> Сохранить только в БД
-              </button>
+            <div className="mt-5 grid gap-3 lg:grid-cols-3">
+              {isNewPoolPage ? (
+                <button
+                  className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-teal-300 px-4 text-sm font-semibold text-slate-950 transition hover:bg-teal-200 disabled:cursor-not-allowed disabled:opacity-60 lg:col-span-3"
+                  disabled={Boolean(busy)}
+                  onClick={() => void handleCreateOnchain()}
+                >
+                  <Plus className="h-4 w-4" /> {busy === 'create-chain' ? 'Создание...' : 'Создать on-chain и сохранить'}
+                </button>
+              ) : (
+                <>
+                  <button
+                    className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.05] px-4 text-sm font-semibold text-slate-100 transition hover:border-teal-300/40 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={Boolean(busy)}
+                    onClick={() => void handleUpdateOnchain()}
+                  >
+                    <Save className="h-4 w-4" /> {busy === 'update-chain' ? 'Обновление...' : 'Обновить on-chain и БД'}
+                  </button>
+                  <button
+                    className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-4 text-sm font-semibold text-slate-300 transition hover:border-teal-300/40 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={Boolean(busy)}
+                    onClick={() => void handleSaveBackendOnly()}
+                  >
+                    <Database className="h-4 w-4" /> Сохранить только в БД
+                  </button>
+                </>
+              )}
             </div>
+              </>
+            ) : (
+              <div className="mt-5 space-y-4">
+                <div className="rounded-xl border border-white/[0.08] bg-black/15 p-3">
+                  <div className="text-sm font-semibold uppercase tracking-[0.18em] text-teal-200">Операционная ликвидность</div>
+                  <div className="mt-1 text-xs leading-5 text-slate-500">
+                    Обмен USDC между текущим пулом и связанным Basket vault.
+                  </div>
+                </div>
+
+                <Field label="Пул">
+                  <select
+                    className={inputClass}
+                    value={selectedLiquidityPool?.pool_object_id || liquidityPoolId}
+                    onChange={(event) => setLiquidityPoolId(event.target.value)}
+                  >
+                    <option value="">Выберите пул</option>
+                    {pools.filter((pool) => pool.pool_object_id).map((pool) => (
+                      <option key={pool.id} value={pool.pool_object_id}>
+                        {pool.name} · {shortId(pool.pool_object_id)}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+
+                {selectedLiquidityPool ? (
+                  <div className="space-y-3">
+                    <div className="rounded-2xl border border-white/[0.08] bg-black/15 p-4">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">{liquidityTop.title}</div>
+                      <div className="mt-2 text-sm font-semibold text-white">{liquidityTop.label}</div>
+                      <div className="mt-1 font-mono text-lg font-semibold text-teal-100">{liquidityTop.balance}</div>
+                    </div>
+
+                    <div className="flex justify-center">
+                      <button
+                        type="button"
+                        className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-teal-300/25 bg-teal-300/10 text-teal-100 transition hover:bg-teal-300/15"
+                        aria-label="Поменять направление обмена"
+                        onClick={() => setLiquidityDirection((current) => current === 'pool-to-vault' ? 'vault-to-pool' : 'pool-to-vault')}
+                      >
+                        <ArrowDown className="h-5 w-5" />
+                      </button>
+                    </div>
+
+                    <div className="rounded-2xl border border-white/[0.08] bg-black/15 p-4">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">{liquidityBottom.title}</div>
+                      <div className="mt-2 text-sm font-semibold text-white">{liquidityBottom.label}</div>
+                      <div className="mt-1 font-mono text-lg font-semibold text-teal-100">{liquidityBottom.balance}</div>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_140px]">
+                      <Field label="Сумма USDC">
+                        <input
+                          className={inputClass}
+                          inputMode="decimal"
+                          value={liquidityAmount}
+                          placeholder="100"
+                          onChange={(event) => setLiquidityAmount(event.target.value.replace(/[^\d.,]/g, ''))}
+                        />
+                      </Field>
+                      <div className="flex items-end">
+                        <button
+                          type="button"
+                          className="inline-flex h-11 w-full items-center justify-center rounded-xl bg-teal-300 px-4 text-sm font-bold text-slate-950 transition hover:bg-teal-200 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={Boolean(busy || !selectedLiquidityPool.pool_accounting_id || !selectedLiquidityPool.basket_vault_id)}
+                          onClick={() => void handleExchangePoolVaultLiquidity().catch((err) => setError(err instanceof Error ? err.message : String(err)))}
+                        >
+                          {busy ? 'Подпись...' : 'Подписать'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-white/[0.08] bg-black/15 px-3 py-3 text-xs leading-5 text-slate-400">
+                      Coin type: <span className="font-mono text-slate-300">{selectedLiquidityPool.coin_type}</span>
+                      <br />
+                      PoolAccounting: <span className="font-mono text-slate-300">{selectedLiquidityPool.pool_accounting_id ? shortId(selectedLiquidityPool.pool_accounting_id) : 'не создан'}</span>
+                      <br />
+                      Basket vault: <span className="font-mono text-slate-300">{selectedLiquidityPool.basket_vault_id ? shortId(selectedLiquidityPool.basket_vault_id) : 'не привязан'}</span>
+                      <br />
+                      В работе: <span className="font-mono text-slate-300">{liquidityBalancesLoading ? '...' : formatUsdcBalance(liquidityBalances?.accountingDeployed ?? null)}</span>
+                    </div>
+
+                    {!selectedLiquidityPool.pool_accounting_id ? (
+                      <button
+                        type="button"
+                        className="inline-flex h-10 w-full items-center justify-center rounded-xl border border-sky-300/25 bg-sky-300/10 px-4 text-xs font-bold text-sky-100 transition hover:bg-sky-300/15 disabled:opacity-60"
+                        disabled={Boolean(busy)}
+                        onClick={() => void handleCreatePoolAccounting().catch((err) => setError(err instanceof Error ? err.message : String(err)))}
+                      >
+                        Создать PoolAccounting
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            )}
 
             {notice ? <div className="mt-4 rounded-xl border border-emerald-300/20 bg-emerald-400/[0.08] p-3 text-sm text-emerald-100">{notice}</div> : null}
             {error ? <div className="mt-4 rounded-xl border border-red-300/20 bg-red-400/[0.08] p-3 text-sm text-red-100">{error}</div> : null}
             {lastDigest ? <div className="mt-4 break-all font-mono text-xs text-slate-500">{lastDigest}</div> : null}
-          </aside>
+          </aside> : null}
         </div>
       </section>
     </main>

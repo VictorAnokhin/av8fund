@@ -42,7 +42,7 @@ type AppRoute =
   | { page: 'terms-of-service' }
   | { page: 'kyc-aml' }
   | { page: 'token-admin' }
-  | { page: 'pool-admin' }
+  | { page: 'pool-admin'; poolId?: string }
   | { page: 'admin-settings' };
 
 function resolveRoute(): AppRoute {
@@ -112,6 +112,11 @@ function resolveRoute(): AppRoute {
 
   if (/(?:\/admin\/tokens|\/tokens)$/.test(normalizedPathname)) {
     return { page: 'token-admin' };
+  }
+
+  const poolAdminDetailMatch = normalizedPathname.match(/(?:\/admin\/pools|\/pools)\/([^/]+)$/);
+  if (poolAdminDetailMatch) {
+    return { page: 'pool-admin', poolId: decodeURIComponent(poolAdminDetailMatch[1]) };
   }
 
   if (/(?:\/admin\/pools|\/pools)$/.test(normalizedPathname)) {
@@ -349,7 +354,7 @@ export default function App() {
           ) : route.page === 'token-admin' ? (
             <TokenAdminPage />
           ) : route.page === 'pool-admin' ? (
-            <PoolAdminPage />
+            <PoolAdminPage poolId={route.poolId} />
           ) : route.page === 'admin-settings' ? (
             <FundSettingsPage />
           ) : (

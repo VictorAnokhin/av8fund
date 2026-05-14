@@ -50,11 +50,21 @@ type PoolWithdrawRequestRecord = {
   availableAtMs: bigint;
 };
 
+type PoolAv8StakeRecord = {
+  objectId: string;
+  poolId: string;
+  owner: string;
+  stakedAv8: bigint;
+  entryValueUsdc: bigint;
+  updatedAtMs: bigint;
+};
+
 const CLOCK_OBJECT_ID = '0x6';
 const FUND_TYPE_PACKAGE_ID = SUI_FUND_CONFIG.packageId;
 const FUND_MODULE_PACKAGE_ID = SUI_FUND_CONFIG.modulePackageId || SUI_FUND_CONFIG.packageId;
 const FUND_POSITION_TYPE = `${FUND_TYPE_PACKAGE_ID}::fund_core::FundPosition`;
 const POOL_WITHDRAW_REQUEST_TYPE = `${FUND_TYPE_PACKAGE_ID}::fund_core::PoolWithdrawRequest`;
+const POOL_AV8_STAKE_TYPE = `${FUND_TYPE_PACKAGE_ID}::pool_manager::PoolAv8Stake`;
 const SHARE_TYPE = `${FUND_TYPE_PACKAGE_ID}::fund_share::FUND_SHARE`;
 const AV8_DECIMALS = 9;
 const DEFAULT_NAV_PRICE_USDC = 1_000_000n;
@@ -322,6 +332,41 @@ async function fetchPoolWithdrawRequests(client: ReturnType<typeof useSuiClient>
   return requests.sort((a, b) => Number(a.availableAtMs - b.availableAtMs));
 }
 
+async function fetchPoolAv8Stakes(client: ReturnType<typeof useSuiClient>, owner: string): Promise<PoolAv8StakeRecord[]> {
+  const stakes: PoolAv8StakeRecord[] = [];
+  let cursor: string | null | undefined = null;
+
+  do {
+    const page = await client.getOwnedObjects({
+      owner,
+      cursor,
+      limit: 50,
+      filter: { StructType: POOL_AV8_STAKE_TYPE },
+      options: { showContent: true, showType: true },
+    });
+
+    for (const item of page.data) {
+      const objectId = item.data?.objectId || '';
+      const fields = asRecord(asRecord(asRecord(item.data).content).fields);
+      if (!objectId) {
+        continue;
+      }
+      stakes.push({
+        objectId,
+        poolId: readObjectId(fields.pool_id),
+        owner: String(fields.owner || owner),
+        stakedAv8: readBigInt(fields.balance),
+        entryValueUsdc: readBigInt(fields.entry_value_usdc),
+        updatedAtMs: readBigInt(fields.updated_at_ms),
+      });
+    }
+
+    cursor = page.hasNextPage ? page.nextCursor : null;
+  } while (cursor);
+
+  return stakes;
+}
+
 function readPoolLiveFields(objectData: unknown): Pick<LivePool, 'liveBalance' | 'liveShares' | 'liveMinDepositUsdc'> {
   const fields = asRecord(asRecord(asRecord(objectData).content).fields);
   return {
@@ -481,6 +526,7 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
   const [amount, setAmount] = React.useState('');
   const [amountEdited, setAmountEdited] = React.useState(false);
   const [formMode, setFormMode] = React.useState<'deposit' | 'withdraw'>('deposit');
+  const [depositAssetMode, setDepositAssetMode] = React.useState<'av8' | 'usdc'>('usdc');
   const [balance, setBalance] = React.useState<bigint>(0n);
   const [av8Balance, setAv8Balance] = React.useState<bigint>(0n);
   const [navPriceUsdc, setNavPriceUsdc] = React.useState<bigint>(DEFAULT_NAV_PRICE_USDC);
@@ -499,6 +545,7 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
   const [quickAmount, setQuickAmount] = React.useState('');
   const [redeemRequests, setRedeemRequests] = React.useState<Array<{ id: string; amountAv8: string; expectedUsdc: string; availableAt: number }>>([]);
   const [onChainRedeemRequests, setOnChainRedeemRequests] = React.useState<PoolWithdrawRequestRecord[]>([]);
+  const [poolAv8Stakes, setPoolAv8Stakes] = React.useState<PoolAv8StakeRecord[]>([]);
   const selectedLinkedWallet = React.useMemo(() => {
     const normalizedSelected = normalizeSwapWalletAddress(selectedSuiAddress);
     return suiLinked.find((wallet) => normalizeSwapWalletAddress(wallet.address) === normalizedSelected) || null;
@@ -526,10 +573,23 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
     return activePools.find((pool) => pool.pool_object_id.toLowerCase() === normalized || String(pool.id) === normalized) ?? null;
   }, [activePools, poolObjectId]);
   const selectedPools = routePool ? [routePool] : [];
-  const depositCoinType = routePool?.coin_type || SUI_FUND_CONFIG.usdcType || activePools[0]?.coin_type || '';
+  const depositCoinType = SUI_FUND_CONFIG.usdcType;
   const minDepositAmount = routePool ? routePool.liveMinDepositUsdc ?? BigInt(routePool.min_deposit_usdc || '0') : 0n;
+  const requiredAv8Balance = routePool ? BigInt(routePool.min_av8_balance || '0') : 0n;
+  const routePoolAv8Stakes = React.useMemo(() => {
+    if (!routePool?.pool_object_id) {
+      return [];
+    }
+    const poolId = normalizeSwapWalletAddress(routePool.pool_object_id);
+    return poolAv8Stakes.filter((stake) => normalizeSwapWalletAddress(stake.poolId) === poolId);
+  }, [poolAv8Stakes, routePool?.pool_object_id]);
+  const routePoolPrimaryStake = routePoolAv8Stakes[0] || null;
+  const routePoolStakedAv8 = routePoolAv8Stakes.reduce((sum, stake) => sum + stake.stakedAv8, 0n);
+  const routePoolStakedValueUsdc = routePoolAv8Stakes.reduce((sum, stake) => sum + stake.entryValueUsdc, 0n);
+  const hasRoutePoolAccess = requiredAv8Balance === 0n || routePoolStakedAv8 >= requiredAv8Balance;
   const parsedAmount = parseDecimalAmount(amount, 6);
   const parsedAv8Amount = parseDecimalAmount(amount, AV8_DECIMALS);
+  const av8StakeValueUsdc = parsedAv8Amount && parsedAv8Amount > 0n ? parsedAv8Amount * navPriceUsdc / 10n ** BigInt(AV8_DECIMALS) : 0n;
   const expectedAv8 = parsedAmount && parsedAmount > 0n ? parsedAmount * 10n ** BigInt(AV8_DECIMALS) / navPriceUsdc : 0n;
   const expectedUsdc = parsedAv8Amount && parsedAv8Amount > 0n ? parsedAv8Amount * navPriceUsdc / 10n ** BigInt(AV8_DECIMALS) : 0n;
   const poolChartData = React.useMemo(() => {
@@ -547,15 +607,32 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
   React.useEffect(() => {
     setAmountEdited(false);
     setLastDepositAmountLabel(null);
+    setDepositAssetMode(routePool && BigInt(routePool.min_av8_balance || '0') > 0n ? 'av8' : 'usdc');
   }, [routePool?.pool_object_id]);
 
   React.useEffect(() => {
-    if (formMode !== 'deposit' || amountEdited || minDepositAmount <= 0n) {
+    if (amountEdited) {
       return;
     }
 
-    setAmount(formatUnits(minDepositAmount, 6, 6));
-  }, [amountEdited, formMode, minDepositAmount]);
+    if (formMode === 'withdraw') {
+      if (depositAssetMode === 'av8') {
+        setAmount(routePoolStakedAv8 > 0n ? formatUnits(routePoolStakedAv8, AV8_DECIMALS, 6) : '');
+      } else {
+        setAmount(av8Balance > 0n ? formatUnits(av8Balance, AV8_DECIMALS, 6) : '');
+      }
+      return;
+    }
+
+    if (depositAssetMode === 'av8') {
+      setAmount(requiredAv8Balance > 0n ? formatUnits(requiredAv8Balance, AV8_DECIMALS, 6) : '');
+      return;
+    }
+
+    if (minDepositAmount > 0n) {
+      setAmount(formatUnits(minDepositAmount, 6, 6));
+    }
+  }, [amountEdited, av8Balance, depositAssetMode, formMode, minDepositAmount, requiredAv8Balance, routePoolStakedAv8]);
 
   React.useEffect(() => {
     function syncActiveWallet() {
@@ -631,21 +708,24 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
         }
       }
       if (currentOwnerAddress) {
-        const [coins, shareCoins, position, withdrawRequests] = await Promise.all([
+        const [coins, shareCoins, position, withdrawRequests, av8Stakes] = await Promise.all([
           depositCoinType ? fetchAllCoins(client, currentOwnerAddress, depositCoinType) : Promise.resolve([]),
           fetchAllCoins(client, currentOwnerAddress, SHARE_TYPE).catch(() => []),
           findFundPosition(client, currentOwnerAddress),
           fetchPoolWithdrawRequests(client, currentOwnerAddress).catch(() => []),
+          fetchPoolAv8Stakes(client, currentOwnerAddress).catch(() => []),
         ]);
         setBalance(coins.reduce((sum, coin) => sum + BigInt(coin.balance), 0n));
         setAv8Balance(shareCoins.reduce((sum, coin) => sum + BigInt(coin.balance), 0n));
         setPositionId(position);
         setOnChainRedeemRequests(withdrawRequests);
+        setPoolAv8Stakes(av8Stakes);
       } else {
         setBalance(0n);
         setAv8Balance(0n);
         setPositionId('');
         setOnChainRedeemRequests([]);
+        setPoolAv8Stakes([]);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -792,6 +872,10 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
       setNotice(
         label === 'position'
           ? 'Позиция фонда создана. Теперь можно внести средства в пул.'
+          : label === 'stake-av8'
+            ? 'AV8 внесен в пул и закреплен за вашей позицией.'
+          : label === 'unstake-av8'
+            ? 'AV8 выведен из пула и возвращен на кошелек.'
           : label === 'withdraw'
             ? 'Заявка на вывод отправлена, USDC возвращен на кошелек.'
             : label === 'withdraw-request'
@@ -824,7 +908,7 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
     await runTx('position', tx);
   }
 
-  async function submitDeposit(targetPool: LivePool, amountUsdc: bigint, label: 'deposit' | 'quick-deposit' = 'deposit') {
+  async function submitDeposit(targetPool: LivePool, amountUsdc: bigint, label: 'deposit' | 'quick-deposit' = 'deposit', displayLabel?: string) {
     if (!currentOwnerAddress) {
       setError('Подключите Sui кошелек или войдите через Google zkLogin.');
       return;
@@ -833,8 +917,12 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
       setError('Сначала создайте FundPosition для этого кошелька.');
       return;
     }
-    if (!targetPool.coin_type || !SUI_FUND_CONFIG.navStateId || !SUI_FUND_CONFIG.shareConfigId) {
-      setError('Не настроены VITE_SUI_USDC_TYPE / NavState / ShareConfig.');
+    if (!depositCoinType || !SUI_FUND_CONFIG.navStateId || !SUI_FUND_CONFIG.shareConfigId || !SUI_FUND_CONFIG.shareFeeConfigId || !SUI_FUND_CONFIG.registryId || !SUI_FUND_CONFIG.basketId) {
+      setError('Не настроены VITE_SUI_USDC_TYPE / NavState / ShareConfig / ShareFeeConfig / AssetRegistry / Basket.');
+      return;
+    }
+    if (!targetPool.basket_vault_id) {
+      setError('Для пополнения депозита у пула должен быть привязан Basket AssetVault в /admin/pools.');
       return;
     }
     if (!amountUsdc || amountUsdc <= 0n) {
@@ -847,7 +935,7 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
       return;
     }
 
-    const coins = await fetchAllCoins(client, currentOwnerAddress, targetPool.coin_type);
+    const coins = await fetchAllCoins(client, currentOwnerAddress, depositCoinType);
     const totalBalance = coins.reduce((sum, coin) => sum + BigInt(coin.balance), 0n);
     if (totalBalance < amountUsdc) {
       setError('Недостаточно USDC на кошельке.');
@@ -857,37 +945,22 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
     const tx = new Transaction();
     tx.setSender(currentOwnerAddress);
     const [payment] = buildCoinPayments(tx, coins, [amountUsdc]);
-    const poolAccountingId = getPoolAccountingId(targetPool);
-    if (SUI_FUND_CONFIG.shareFeeConfigId && poolAccountingId) {
-      tx.moveCall({
-        target: `${FUND_MODULE_PACKAGE_ID}::fund_core::deposit_to_pool_with_fee`,
-        typeArguments: [targetPool.coin_type],
-        arguments: [
-          tx.object(SUI_FUND_CONFIG.navStateId),
-          tx.object(SUI_FUND_CONFIG.shareConfigId),
-          tx.object(SUI_FUND_CONFIG.shareFeeConfigId),
-          tx.object(targetPool.pool_object_id),
-          tx.object(poolAccountingId),
-          tx.object(positionId),
-          payment,
-          tx.object(CLOCK_OBJECT_ID),
-        ],
-      });
-    } else {
-      tx.moveCall({
-        target: `${FUND_MODULE_PACKAGE_ID}::fund_core::deposit_to_pool`,
-        typeArguments: [targetPool.coin_type],
-        arguments: [
-          tx.object(SUI_FUND_CONFIG.navStateId),
-          tx.object(SUI_FUND_CONFIG.shareConfigId),
-          tx.object(targetPool.pool_object_id),
-          tx.object(positionId),
-          payment,
-          tx.object(CLOCK_OBJECT_ID),
-        ],
-      });
-    }
-    const submittedAmount = `${formatUnits(amountUsdc, 6, 6)} ${targetPool.symbol}`;
+    tx.moveCall({
+      target: `${FUND_MODULE_PACKAGE_ID}::fund_core::deposit_to_asset_vault_with_fee`,
+      typeArguments: [depositCoinType],
+      arguments: [
+        tx.object(SUI_FUND_CONFIG.navStateId),
+        tx.object(SUI_FUND_CONFIG.shareConfigId),
+        tx.object(SUI_FUND_CONFIG.shareFeeConfigId),
+        tx.object(SUI_FUND_CONFIG.registryId),
+        tx.object(SUI_FUND_CONFIG.basketId),
+        tx.object(targetPool.basket_vault_id),
+        tx.object(positionId),
+        payment,
+        tx.object(CLOCK_OBJECT_ID),
+      ],
+    });
+    const submittedAmount = displayLabel || `${formatUnits(amountUsdc, 6, 6)} ${targetPool.symbol}`;
     const ok = await runTx(label, tx);
     if (ok) {
       setLastDepositAmountLabel(submittedAmount);
@@ -899,11 +972,138 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
       setError('Откройте страницу конкретного пула.');
       return;
     }
+    if (!routePool.coin_type) {
+      setError('У пула не настроен тип монеты.');
+      return;
+    }
     if (!parsedAmount || parsedAmount <= 0n) {
       setError('Введите сумму депозита в USDC.');
       return;
     }
     await submitDeposit(routePool, parsedAmount);
+  }
+
+  async function handleDepositAv8() {
+    if (!currentOwnerAddress) {
+      setError('Подключите Sui кошелек или войдите через Google zkLogin.');
+      return;
+    }
+    if (!routePool) {
+      setError('Откройте страницу конкретного пула.');
+      return;
+    }
+    if (!routePool.coin_type) {
+      setError('У пула не настроен тип монеты.');
+      return;
+    }
+    if (!SUI_FUND_CONFIG.navStateId) {
+      setError('Не настроен NavState для оценки AV8.');
+      return;
+    }
+    if (!parsedAv8Amount || parsedAv8Amount <= 0n) {
+      setError('Введите сумму AV8.');
+      return;
+    }
+    if (av8StakeValueUsdc <= 0n) {
+      setError('Не удалось рассчитать USDC по текущему NAV AV8.');
+      return;
+    }
+
+    const shareCoins = await fetchAllCoins(client, currentOwnerAddress, SHARE_TYPE);
+    const totalBalance = shareCoins.reduce((sum, coin) => sum + BigInt(coin.balance), 0n);
+    if (totalBalance < parsedAv8Amount) {
+      setError('Недостаточно AV8 на кошельке.');
+      return;
+    }
+
+    const tx = new Transaction();
+    tx.setSender(currentOwnerAddress);
+    const [av8Payment] = buildCoinPayments(tx, shareCoins, [parsedAv8Amount]);
+    if (routePoolPrimaryStake) {
+      tx.moveCall({
+        target: `${FUND_MODULE_PACKAGE_ID}::pool_manager::add_pool_av8_stake`,
+        typeArguments: [routePool.coin_type],
+        arguments: [
+          tx.object(routePool.pool_object_id),
+          tx.object(routePoolPrimaryStake.objectId),
+          tx.object(SUI_FUND_CONFIG.navStateId),
+          av8Payment,
+          tx.object(CLOCK_OBJECT_ID),
+        ],
+      });
+    } else {
+      tx.moveCall({
+        target: `${FUND_MODULE_PACKAGE_ID}::pool_manager::create_pool_av8_stake`,
+        typeArguments: [routePool.coin_type],
+        arguments: [
+          tx.object(routePool.pool_object_id),
+          tx.object(SUI_FUND_CONFIG.navStateId),
+          av8Payment,
+          tx.object(CLOCK_OBJECT_ID),
+        ],
+      });
+    }
+
+    const ok = await runTx('stake-av8', tx);
+    if (ok) {
+      setLastDepositAmountLabel(`${formatUnits(parsedAv8Amount, AV8_DECIMALS, 6)} AV8 = ${formatUnits(av8StakeValueUsdc, 6, 6)} USDC`);
+      setDepositAssetMode('usdc');
+      setAmountEdited(false);
+    }
+  }
+
+  async function handleUnstakeAv8() {
+    if (!currentOwnerAddress) {
+      setError('Подключите Sui кошелек или войдите через Google zkLogin.');
+      return;
+    }
+    if (!routePool) {
+      setError('Откройте страницу конкретного пула.');
+      return;
+    }
+    if (!routePool.coin_type) {
+      setError('У пула не настроен тип монеты.');
+      return;
+    }
+    if (!parsedAv8Amount || parsedAv8Amount <= 0n) {
+      setError('Введите сумму AV8 для вывода из пула.');
+      return;
+    }
+    if (routePoolStakedAv8 <= 0n || routePoolAv8Stakes.length === 0) {
+      setError('В этом пуле нет внесенного AV8 для вывода.');
+      return;
+    }
+    if (routePoolStakedAv8 < parsedAv8Amount) {
+      setError(`В пуле доступно только ${formatUnits(routePoolStakedAv8, AV8_DECIMALS, 6)} AV8.`);
+      return;
+    }
+
+    const tx = new Transaction();
+    tx.setSender(currentOwnerAddress);
+    let remaining = parsedAv8Amount;
+    for (const stake of routePoolAv8Stakes) {
+      if (remaining <= 0n) {
+        break;
+      }
+      if (stake.stakedAv8 <= 0n) {
+        continue;
+      }
+
+      const amountFromStake = stake.stakedAv8 < remaining ? stake.stakedAv8 : remaining;
+      tx.moveCall({
+        target: `${FUND_MODULE_PACKAGE_ID}::pool_manager::unstake_pool_av8`,
+        typeArguments: [routePool.coin_type],
+        arguments: [
+          tx.object(routePool.pool_object_id),
+          tx.object(stake.objectId),
+          tx.pure.u64(amountFromStake),
+          tx.object(CLOCK_OBJECT_ID),
+        ],
+      });
+      remaining -= amountFromStake;
+    }
+
+    await runTx('unstake-av8', tx);
   }
 
   async function handleWithdraw() {
@@ -957,7 +1157,7 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
 
   async function handleQuickDeposit() {
     if (!quickPool) {
-      setError('Выберите пул для учета инвестиционного мандата.');
+      setError('Не найден активный пул с привязанным AssetVault для пополнения депозита.');
       return;
     }
     const value = parseDecimalAmount(quickAmount, 6);
@@ -1063,15 +1263,34 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
   const walletCanSign = signingRoute.useExtension || signingRoute.useZkLogin;
   const walletLabel = currentOwnerAddress ? shortId(currentOwnerAddress) : 'Not connected';
   const availableLabel = formMode === 'deposit'
-    ? `${formatUnits(balance, 6)} ${routePool?.symbol || 'USDC'}`
-    : `${formatUnits(av8Balance, AV8_DECIMALS)} AV8`;
+    ? depositAssetMode === 'av8'
+      ? `${formatUnits(av8Balance, AV8_DECIMALS)} AV8`
+      : `${formatUnits(balance, 6)} ${routePool?.symbol || 'USDC'}`
+    : depositAssetMode === 'av8'
+      ? `${formatUnits(routePoolStakedAv8, AV8_DECIMALS, 6)} AV8`
+      : `${formatUnits(av8Balance, AV8_DECIMALS)} AV8`;
   const receiveLabel = formMode === 'deposit'
-    ? `${formatUnits(expectedAv8, AV8_DECIMALS)} AV8`
-    : `${formatUnits(expectedUsdc, 6)} ${routePool?.symbol || 'USDC'}`;
-  const submitLabel = formMode === 'deposit' ? 'Внести' : 'Забрать';
+    ? depositAssetMode === 'av8'
+      ? `${formatUnits(parsedAv8Amount || 0n, AV8_DECIMALS, 6)} AV8 = ${formatUnits(av8StakeValueUsdc, 6, 6)} USDC`
+      : `${formatUnits(expectedAv8, AV8_DECIMALS)} AV8`
+    : depositAssetMode === 'av8'
+      ? `${formatUnits(parsedAv8Amount || 0n, AV8_DECIMALS, 6)} AV8 = ${formatUnits(expectedUsdc, 6, 6)} USDC`
+      : `${formatUnits(expectedUsdc, 6)} ${routePool?.symbol || 'USDC'}`;
+  const submitLabel = formMode === 'deposit'
+    ? (depositAssetMode === 'av8' ? 'Внести AV8' : 'Внести USDC')
+    : depositAssetMode === 'av8'
+      ? 'Вывести AV8'
+      : 'Забрать USDC';
   const completedDepositLabel = formMode === 'deposit' && lastDepositAmountLabel ? `Внесено ${lastDepositAmountLabel}` : null;
   const selectedWalletRequiresZkLogin = selectedLinkedWallet?.web3auth === 1;
-  const canSubmit = Boolean(routePool && currentOwnerAddress && walletCanSign && depositCoinType && !busy);
+  const canSubmit = Boolean(
+    routePool
+    && currentOwnerAddress
+    && walletCanSign
+    && (formMode !== 'deposit' || depositAssetMode !== 'usdc' || depositCoinType)
+    && !busy
+    && (formMode !== 'deposit' || depositAssetMode !== 'usdc' || hasRoutePoolAccess),
+  );
   const quickParsedAmount = parseDecimalAmount(quickAmount, quickMode === 'deposit' ? 6 : AV8_DECIMALS) ?? 0n;
   const quickMintFee = quickMode === 'deposit' ? applyBps(quickParsedAmount, shareSettings?.mint_fee_bps ?? 0) : 0n;
   const quickNetDeposit = quickParsedAmount > quickMintFee ? quickParsedAmount - quickMintFee : 0n;
@@ -1083,7 +1302,7 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
     : 0n;
   const quickRedeemFee = quickMode === 'redeem' ? applyBps(quickGrossRedeemUsdc, shareSettings?.redeem_fee_bps ?? 0) : 0n;
   const quickExpectedRedeemUsdc = quickGrossRedeemUsdc > quickRedeemFee ? quickGrossRedeemUsdc - quickRedeemFee : 0n;
-  const quickCanSubmit = Boolean(currentOwnerAddress && walletCanSign && !busy && (quickMode === 'redeem' ? quickPool : quickPool));
+  const quickCanSubmit = Boolean(currentOwnerAddress && walletCanSign && !busy && (quickMode === 'redeem' ? quickPool : quickPool?.basket_vault_id));
 
   return (
     <main className="min-h-[calc(100vh-160px)] bg-slate-950 pb-20 pt-14">
@@ -1174,8 +1393,8 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
                   <div className="mt-2 text-lg font-semibold text-white">{routePool.liveBalance === null ? 'n/a' : `${formatUnits(routePool.liveBalance, 6)} ${routePool.symbol}`}</div>
                 </div>
                 <div className="rounded-2xl border border-white/[0.08] bg-white/[0.035] p-4">
-                  <div className="text-xs uppercase tracking-[0.14em] text-slate-500">Risk</div>
-                  <div className="mt-2 text-lg font-semibold text-white">{routePool.risk_level}/5</div>
+                  <div className="text-xs uppercase tracking-[0.14em] text-slate-500">Уровень AV8</div>
+                  <div className="mt-2 text-lg font-semibold text-white">{formatUnits(BigInt(routePool.min_av8_balance || '0'), AV8_DECIMALS, 6)} AV8</div>
                 </div>
                 <div className="rounded-2xl border border-white/[0.08] bg-white/[0.035] p-4">
                   <div className="text-xs uppercase tracking-[0.14em] text-slate-500">Realized APY</div>
@@ -1252,9 +1471,8 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
                         setError(null);
                         setNotice(null);
                         setLastDepositAmountLabel(null);
-                        if (nextMode === 'deposit') {
-                          setAmountEdited(false);
-                        }
+                        setAmountEdited(false);
+                        setDepositAssetMode(nextMode === 'deposit' && requiredAv8Balance === 0n ? 'usdc' : 'av8');
                       }}
                       className={`h-10 rounded-lg text-sm font-semibold transition ${
                         formMode === mode
@@ -1267,9 +1485,56 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
                   ))}
                 </div>
 
+                <div className="mt-4 grid grid-cols-2 rounded-xl border border-white/[0.08] bg-slate-950/60 p-1">
+                  {[
+                    ['av8', 'AV8'],
+                    ['usdc', 'USDC'],
+                  ].map(([mode, label]) => {
+                    const disabled = formMode === 'deposit' && mode === 'usdc' && !hasRoutePoolAccess;
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => {
+                          const nextMode = mode as 'av8' | 'usdc';
+                          setDepositAssetMode(nextMode);
+                          setAmountEdited(false);
+                          setError(null);
+                          setNotice(null);
+                          setLastDepositAmountLabel(null);
+                        }}
+                        className={`h-10 rounded-lg text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-45 ${
+                          depositAssetMode === mode
+                            ? 'bg-teal-300 text-slate-950'
+                            : 'text-slate-300 hover:bg-white/[0.05] hover:text-white'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {formMode === 'deposit' && requiredAv8Balance > 0n ? (
+                  <div className="mt-4 rounded-2xl border border-white/[0.08] bg-slate-950/50 p-4">
+                    <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">AV8 в пуле</div>
+                    <div className="mt-2 text-lg font-semibold text-white">
+                      {formatUnits(routePoolStakedAv8, AV8_DECIMALS, 6)} / {formatUnits(requiredAv8Balance, AV8_DECIMALS, 6)} AV8
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      Внесено: {formatUnits(routePoolStakedValueUsdc, 6, 6)} USDC по NAV на момент внесения.
+                    </div>
+                  </div>
+                ) : null}
+
                 <div className="mt-4 rounded-2xl border border-sky-400/18 bg-sky-400/10 p-4">
                   <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-100/75">
-                    {formMode === 'deposit' ? 'Доступно USDC' : 'Доступно AV8'}
+                    {formMode === 'deposit'
+                      ? (depositAssetMode === 'av8' ? 'Доступно AV8' : 'Доступно USDC')
+                      : depositAssetMode === 'av8'
+                        ? 'AV8 в пуле'
+                        : 'Доступно AV8'}
                   </div>
                   <div className="mt-2 text-2xl font-semibold text-white">
                     {loading && currentOwnerAddress ? messages.invest.depositLoading : availableLabel}
@@ -1278,7 +1543,11 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
 
                 <label className="mt-4 block">
                   <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-                    {formMode === 'deposit' ? 'Внести' : 'Забрать'}
+                    {formMode === 'deposit'
+                      ? (depositAssetMode === 'av8' ? 'Внести AV8' : 'Внести USDC')
+                      : depositAssetMode === 'av8'
+                        ? 'Вывести AV8 из пула'
+                        : 'Забрать USDC'}
                   </span>
                   <div className="flex overflow-hidden rounded-xl border border-white/[0.09] bg-slate-950/70 focus-within:border-teal-300/40">
                     <input
@@ -1292,12 +1561,27 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
                       className="h-12 min-w-0 flex-1 bg-transparent px-3 text-sm text-slate-100 outline-none"
                     />
                     <div className="flex items-center border-l border-white/[0.08] px-3 text-sm font-semibold text-slate-300">
-                      {formMode === 'deposit' ? routePool.symbol : 'AV8'}
+                      {formMode === 'deposit' ? (depositAssetMode === 'av8' ? 'AV8' : routePool.symbol) : 'AV8'}
                     </div>
                   </div>
-                  {formMode === 'deposit' && minDepositAmount > 0n ? (
+                  {formMode === 'deposit' && depositAssetMode === 'usdc' && minDepositAmount > 0n ? (
                     <div className="mt-2 text-xs text-slate-500">
                       Минимальный депозит: {formatUnits(minDepositAmount, 6, 6)} {routePool.symbol}
+                    </div>
+                  ) : null}
+                  {formMode === 'deposit' && depositAssetMode === 'av8' && requiredAv8Balance > 0n ? (
+                    <div className="mt-2 text-xs text-slate-500">
+                      Минимум для входа: {formatUnits(requiredAv8Balance, AV8_DECIMALS, 6)} AV8.
+                    </div>
+                  ) : null}
+                  {formMode === 'deposit' && depositAssetMode === 'usdc' && !hasRoutePoolAccess ? (
+                    <div className="mt-2 text-xs text-amber-200">
+                      Сначала внесите минимум {formatUnits(requiredAv8Balance, AV8_DECIMALS, 6)} AV8 в пул.
+                    </div>
+                  ) : null}
+                  {formMode === 'withdraw' && depositAssetMode === 'av8' ? (
+                    <div className="mt-2 text-xs text-slate-500">
+                      Доступно к выводу из пула: {formatUnits(routePoolStakedAv8, AV8_DECIMALS, 6)} AV8.
                     </div>
                   ) : null}
                 </label>
@@ -1339,11 +1623,19 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
 
                   <button
                     type="button"
-                    onClick={() => void (!positionId && formMode === 'deposit' ? handleOpenPosition() : formMode === 'deposit' ? handleDeposit() : handleWithdraw())}
+                    onClick={() => void (!positionId && formMode === 'deposit' && depositAssetMode === 'usdc'
+                      ? handleOpenPosition()
+                      : formMode === 'deposit' && depositAssetMode === 'av8'
+                        ? handleDepositAv8()
+                      : formMode === 'deposit'
+                          ? handleDeposit()
+                          : depositAssetMode === 'av8'
+                            ? handleUnstakeAv8()
+                          : handleWithdraw())}
                     disabled={!canSubmit}
                     className="inline-flex h-12 w-full items-center justify-center rounded-xl bg-teal-300 px-4 text-sm font-bold text-slate-950 transition hover:bg-teal-200 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {busy ? (busy === 'position' ? 'Создание...' : 'Подпись...') : completedDepositLabel || (!positionId && formMode === 'deposit' ? 'Создать FundPosition' : submitLabel)}
+                    {busy ? (busy === 'position' ? 'Создание...' : 'Подпись...') : completedDepositLabel || (!positionId && formMode === 'deposit' && depositAssetMode === 'usdc' ? 'Создать FundPosition' : submitLabel)}
                   </button>
                 </div>
               </section>
@@ -1451,23 +1743,6 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
                       </div>
                     )}
                   </label>
-
-                  {quickMode === 'deposit' ? (
-                    <label className="mt-4 block">
-                      <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Пул учета</span>
-                      <select
-                        value={quickPool?.pool_object_id || quickPoolObjectId}
-                        onChange={(event) => setQuickPoolObjectId(event.target.value)}
-                        className="h-11 w-full rounded-xl border border-white/[0.09] bg-slate-950/70 px-3 text-sm font-semibold text-slate-100 outline-none transition focus:border-teal-300/40"
-                      >
-                        {activePools.map((pool) => (
-                          <option key={pool.pool_object_id || pool.id} value={pool.pool_object_id}>
-                            {pool.name} - {formatBps(pool.realized_apy_bps || pool.target_apy_bps)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
 
                   <label className="mt-4 block">
                     <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">

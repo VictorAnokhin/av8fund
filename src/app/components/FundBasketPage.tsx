@@ -663,6 +663,7 @@ export function FundBasketPage() {
 	                    <div>
 	                      <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">{t.valueInUsdc}</label>
 	                      <input className={inputClass} value={managedForm.valueUsdc} onChange={(event) => patchManagedForm({ valueUsdc: event.target.value })} placeholder={t.placeholderValueUsdc} />
+	                      <div className="mt-2 text-xs leading-5 text-slate-500">{t.valueInUsdcHint}</div>
 	                      <button
 	                        type="button"
 	                        className="mt-2 inline-flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-sky-300/25 bg-sky-300/10 px-3 text-xs font-bold text-sky-100 transition hover:bg-sky-300/15 disabled:opacity-60"

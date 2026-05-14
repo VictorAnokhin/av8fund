@@ -1561,6 +1561,7 @@ export type FundPoolRecord = {
   target_apy_bps: number
   realized_apy_bps: number
   min_deposit_usdc: string
+  min_av8_balance: string
   max_weight_bps: number
   active: boolean
   logo_url: string
@@ -1586,6 +1587,7 @@ export type FundPoolInput = {
   targetApyBps: number
   realizedApyBps: number
   minDepositUsdc: string
+  minAv8Balance: string
   maxWeightBps: number
   active: boolean
   logoUrl?: string
@@ -1610,6 +1612,7 @@ function toFundPoolPayload(input: FundPoolInput): Record<string, unknown> {
     target_apy_bps: input.targetApyBps,
     realized_apy_bps: input.realizedApyBps,
     min_deposit_usdc: input.minDepositUsdc || '0',
+    min_av8_balance: input.minAv8Balance || '0',
     max_weight_bps: input.maxWeightBps,
     active: input.active,
     logo_url: input.logoUrl || '',

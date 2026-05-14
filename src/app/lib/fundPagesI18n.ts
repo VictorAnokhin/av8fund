@@ -30,6 +30,7 @@ export type FundBasketCopy = {
   vaultObjectId: string;
   amount: string;
   valueInUsdc: string;
+  valueInUsdcHint: string;
   oracleEstimate: string;
   oracleEstimateBusy: string;
   oracleQuotePrefix: string;
@@ -152,7 +153,7 @@ export const fundBasketEn: FundBasketCopy = fb({
   refresh: 'Refresh',
   noticeRecorded: 'Operation recorded on-chain.',
   txPrefix: 'tx:',
-  nav: 'NAV',
+  nav: 'Basket value',
   liquidSui: 'Liquid SUI',
   managedValue: 'Managed value',
   usdcSuffix: ' USDC',
@@ -174,6 +175,7 @@ export const fundBasketEn: FundBasketCopy = fb({
   vaultObjectId: 'Vault object ID',
   amount: 'Amount',
   valueInUsdc: 'Value in USDC',
+  valueInUsdcHint: 'For Save vault value this is the full current vault valuation, not AV8 NAV price.',
   oracleEstimate: 'Calculate by Pyth',
   oracleEstimateBusy: 'Pricing...',
   oracleQuotePrefix: 'Oracle quote',
@@ -183,7 +185,7 @@ export const fundBasketEn: FundBasketCopy = fb({
   positionKind: 'Position kind',
   recipientWithdraw: 'Recipient for withdraw',
   createVault: 'Create vault',
-  setValue: 'Set value',
+  setValue: 'Save vault value',
   deposit: 'Deposit',
   withdraw: 'Withdraw',
   placeholderAmount: '10.5',
@@ -242,7 +244,7 @@ export const fundBasketUa: FundBasketCopy = fb({
   refresh: 'Оновити',
   noticeRecorded: 'Операцію записано on-chain.',
   txPrefix: 'tx:',
-  nav: 'NAV',
+  nav: 'Вартість кошика',
   liquidSui: 'Ліквідний SUI',
   managedValue: 'Керована вартість',
   usdcSuffix: ' USDC',
@@ -264,6 +266,7 @@ export const fundBasketUa: FundBasketCopy = fb({
   vaultObjectId: 'Object ID vault',
   amount: 'Сума',
   valueInUsdc: 'Вартість у USDC',
+  valueInUsdcHint: 'Для збереження vault це повна поточна оцінка vault, не ціна NAV AV8.',
   oracleEstimate: 'Розрахувати через Pyth',
   oracleEstimateBusy: 'Оцінка...',
   oracleQuotePrefix: 'Оракул',
@@ -273,7 +276,7 @@ export const fundBasketUa: FundBasketCopy = fb({
   positionKind: 'Тип позиції',
   recipientWithdraw: 'Отримувач для виводу',
   createVault: 'Створити vault',
-  setValue: 'Задати вартість',
+  setValue: 'Зберегти вартість vault',
   deposit: 'Депозит',
   withdraw: 'Вивід',
   placeholderAmount: '10.5',
@@ -332,7 +335,7 @@ export const fundBasketRu: FundBasketCopy = fb({
   refresh: 'Обновить',
   noticeRecorded: 'Операция записана on-chain.',
   txPrefix: 'tx:',
-  nav: 'NAV',
+  nav: 'Стоимость корзины',
   liquidSui: 'Ликвидный SUI',
   managedValue: 'Управляемая стоимость',
   usdcSuffix: ' USDC',
@@ -354,6 +357,7 @@ export const fundBasketRu: FundBasketCopy = fb({
   vaultObjectId: 'Object ID vault',
   amount: 'Сумма',
   valueInUsdc: 'Стоимость в USDC',
+  valueInUsdcHint: 'Для сохранения vault это полная текущая оценка vault, не цена NAV AV8.',
   oracleEstimate: 'Рассчитать через Pyth',
   oracleEstimateBusy: 'Оценка...',
   oracleQuotePrefix: 'Оракул',
@@ -363,7 +367,7 @@ export const fundBasketRu: FundBasketCopy = fb({
   positionKind: 'Тип позиции',
   recipientWithdraw: 'Получатель для вывода',
   createVault: 'Создать vault',
-  setValue: 'Задать стоимость',
+  setValue: 'Сохранить стоимость vault',
   deposit: 'Депозит',
   withdraw: 'Вывод',
   placeholderAmount: '10.5',
