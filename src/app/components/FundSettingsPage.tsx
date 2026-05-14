@@ -18,6 +18,7 @@ const EMPTY_SETTINGS: FundShareSettingsInput = {
   network: SUI_NETWORK || 'testnet',
   packageId: SUI_FUND_CONFIG.packageId,
   shareConfigId: SUI_FUND_CONFIG.shareConfigId,
+  shareFeeConfigId: '',
   shareAdminCapId: SUI_FUND_CONFIG.shareAdminCapId,
   shareTreasuryCapId: SUI_FUND_CONFIG.shareTreasuryCapId,
   pricingModel: 'nav_per_share',
@@ -40,6 +41,7 @@ function recordToInput(record: FundShareSettingsRecord): FundShareSettingsInput 
     network: record.network,
     packageId: record.package_id || SUI_FUND_CONFIG.packageId,
     shareConfigId: record.share_config_id || SUI_FUND_CONFIG.shareConfigId,
+    shareFeeConfigId: record.share_fee_config_id || '',
     shareAdminCapId: record.share_admin_cap_id || SUI_FUND_CONFIG.shareAdminCapId,
     shareTreasuryCapId: record.share_treasury_cap_id || SUI_FUND_CONFIG.shareTreasuryCapId,
     pricingModel: record.pricing_model,
@@ -55,6 +57,44 @@ function recordToInput(record: FundShareSettingsRecord): FundShareSettingsInput 
     redeemPaused: record.redeem_paused,
     notes: record.notes || '',
   };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+}
+
+function extractCreatedFeeConfigId(result: unknown): string {
+  const changes = Array.isArray(asRecord(result).objectChanges)
+    ? (asRecord(result).objectChanges as unknown[])
+    : [];
+  const created = changes.find((change) => {
+    if (!change || typeof change !== 'object' || !('type' in change) || (change as Record<string, unknown>).type !== 'created') {
+      return false;
+    }
+    const objectType = 'objectType' in change ? String((change as Record<string, unknown>).objectType || '') : '';
+    return objectType.includes('::fund_share::ShareFeeConfig');
+  });
+
+  if (created && typeof created === 'object' && 'objectId' in created) {
+    return String((created as Record<string, unknown>).objectId || '');
+  }
+
+  const events = Array.isArray(asRecord(result).events) ? (asRecord(result).events as unknown[]) : [];
+  for (const event of events) {
+    const eventRecord = asRecord(event);
+    const eventType = String(eventRecord.type || '');
+    if (!eventType.includes('::fund_share::ShareFeeConfigCreatedEvent')) {
+      continue;
+    }
+
+    const parsedJson = asRecord(eventRecord.parsedJson);
+    const feeConfigId = parsedJson.fee_config_id;
+    if (typeof feeConfigId === 'string' && feeConfigId) {
+      return feeConfigId;
+    }
+  }
+
+  return '';
 }
 
 function formatBps(value: number): string {
@@ -82,7 +122,7 @@ export function FundSettingsPage() {
   const suiClient = useSuiClient();
   const { mutateAsync: signAndExecuteTransaction } = useSignAndExecuteTransaction();
   const [settings, setSettings] = React.useState<FundShareSettingsInput>(EMPTY_SETTINGS);
-  const [feeConfigId, setFeeConfigId] = React.useState(SUI_FUND_CONFIG.shareFeeConfigId || '');
+  const [feeConfigId, setFeeConfigId] = React.useState('');
   const [loading, setLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [onChainBusy, setOnChainBusy] = React.useState(false);
@@ -100,6 +140,7 @@ export function FundSettingsPage() {
         packageId: SUI_FUND_CONFIG.packageId,
       });
       setSettings(recordToInput(record));
+      setFeeConfigId(record.share_fee_config_id || '');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -121,8 +162,9 @@ export function FundSettingsPage() {
     setError(null);
     setNotice(null);
     try {
-      const saved = await saveFundShareSettings(settings, { adminAddress: account?.address || '' });
+      const saved = await saveFundShareSettings({ ...settings, shareFeeConfigId: feeConfigId.trim() }, { adminAddress: account?.address || '' });
       setSettings(recordToInput(saved));
+      setFeeConfigId(saved.share_fee_config_id || feeConfigId.trim());
       setNotice('Настройки AV8 сохранены.');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -181,10 +223,33 @@ export function FundSettingsPage() {
       if (!digest) {
         throw new Error('Wallet did not return transaction digest.');
       }
-      await suiClient.waitForTransaction({ digest, options: { showEffects: true, showEvents: true } });
+      console.log('Transaction digest:', digest);
+      const receipt = await suiClient.waitForTransaction({
+        digest,
+        options: {
+          showEffects: true,
+          showEvents: true,
+          showObjectChanges: true,
+        },
+      });
+      console.log('Transaction receipt:', receipt);
+      const createdFeeConfigId = extractCreatedFeeConfigId(receipt);
+      console.log('Final createdFeeConfigId:', createdFeeConfigId);
+      const finalFeeConfigId = createdFeeConfigId || feeConfigId.trim();
+      if (createdFeeConfigId) {
+        setFeeConfigId(createdFeeConfigId);
+      }
       setLastTxDigest(digest);
-      setNotice(feeConfigId.trim()
-        ? 'Fee config обновлен on-chain.'
+      const payloadToSave: FundShareSettingsInput = {
+        ...settings,
+        shareFeeConfigId: finalFeeConfigId,
+      };
+      await saveFundShareSettings(payloadToSave, { adminAddress: account?.address || '' });
+      setSettings((current) => ({ ...current, shareFeeConfigId: finalFeeConfigId }));
+      setNotice(finalFeeConfigId
+        ? (feeConfigId.trim()
+          ? 'Fee config обновлен on-chain и сохранен в БД.'
+          : 'Fee config создан on-chain и сохранен в БД.')
         : 'Fee config создан on-chain. Скопируйте object id из транзакции в VITE_SUI_SHARE_FEE_CONFIG_ID.');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -270,7 +335,7 @@ export function FundSettingsPage() {
 
             <div className="mt-4 grid gap-4 md:grid-cols-2">
               <Field label="ShareFeeConfig ID">
-                <input className={`${inputClass} font-mono text-xs`} value={feeConfigId} onChange={(event) => setFeeConfigId(event.target.value)} placeholder="создайте on-chain и вставьте object id" />
+                <input className={`${inputClass} font-mono text-xs`} value={feeConfigId} onChange={(event) => { setFeeConfigId(event.target.value); patch({ shareFeeConfigId: event.target.value }); }} placeholder="создайте on-chain и вставьте object id" />
               </Field>
               <Field label="ShareConfig ID">
                 <input className={`${inputClass} font-mono text-xs`} value={settings.shareConfigId || ''} onChange={(event) => patch({ shareConfigId: event.target.value })} />

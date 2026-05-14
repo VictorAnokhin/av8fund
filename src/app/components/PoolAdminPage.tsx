@@ -62,6 +62,7 @@ const EMPTY_FORM: FundPoolInput = {
   minAv8Balance: '0',
   maxWeightBps: 5000,
   active: true,
+  isDefaultDeposit: false,
   logoUrl: 'https://assets.coingecko.com/coins/images/6319/large/usdc.png',
   notes: '',
 };
@@ -218,6 +219,7 @@ function recordToForm(record: FundPoolRecord): FundPoolInput {
     minAv8Balance: record.min_av8_balance || '0',
     maxWeightBps: record.max_weight_bps,
     active: record.active,
+    isDefaultDeposit: Boolean(record.is_default_deposit),
     logoUrl: record.logo_url,
     notes: record.notes,
   };
@@ -956,6 +958,11 @@ export function PoolAdminPage({ poolId }: PoolAdminPageProps) {
                             <span className={pool.active ? 'rounded-full border border-emerald-300/20 bg-emerald-300/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-emerald-100' : 'rounded-full border border-slate-300/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400'}>
                               {pool.active ? 'active' : 'paused'}
                             </span>
+                            {pool.is_default_deposit ? (
+                              <span className="rounded-full border border-sky-300/20 bg-sky-300/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-sky-100">
+                                default deposit
+                              </span>
+                            ) : null}
                           </div>
                           <div className="mt-1 truncate text-xs text-slate-500">{pool.symbol} · {shortId(pool.coin_type)}</div>
                           {pool.description ? <div className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">{pool.description}</div> : null}
@@ -1113,6 +1120,10 @@ export function PoolAdminPage({ poolId }: PoolAdminPageProps) {
               <label className="flex items-center gap-3 rounded-xl border border-white/[0.08] bg-black/15 p-3 text-sm text-slate-200">
                 <input type="checkbox" checked={form.active} onChange={(event) => update('active', event.target.checked)} />
                 Пул активен для клиентов
+              </label>
+              <label className="flex items-center gap-3 rounded-xl border border-sky-300/15 bg-sky-400/10 p-3 text-sm text-sky-100">
+                <input type="checkbox" checked={form.isDefaultDeposit} onChange={(event) => update('isDefaultDeposit', event.target.checked)} />
+                Default route для пополнения /invest
               </label>
             </div>
 

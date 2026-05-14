@@ -1564,6 +1564,7 @@ export type FundPoolRecord = {
   min_av8_balance: string
   max_weight_bps: number
   active: boolean
+  is_default_deposit: boolean
   logo_url: string
   notes: string
   created_at: string | null
@@ -1590,6 +1591,7 @@ export type FundPoolInput = {
   minAv8Balance: string
   maxWeightBps: number
   active: boolean
+  isDefaultDeposit: boolean
   logoUrl?: string
   notes?: string
 }
@@ -1615,6 +1617,7 @@ function toFundPoolPayload(input: FundPoolInput): Record<string, unknown> {
     min_av8_balance: input.minAv8Balance || '0',
     max_weight_bps: input.maxWeightBps,
     active: input.active,
+    is_default_deposit: input.isDefaultDeposit,
     logo_url: input.logoUrl || '',
     notes: input.notes || '',
   }
@@ -1773,6 +1776,7 @@ export type FundShareSettingsRecord = {
   network: string
   package_id: string
   share_config_id: string
+  share_fee_config_id: string
   share_admin_cap_id: string
   share_treasury_cap_id: string
   pricing_model: 'nav_per_share' | 'manual_floor' | 'bonding_curve'
@@ -1795,6 +1799,7 @@ export type FundShareSettingsInput = {
   network: string
   packageId?: string
   shareConfigId?: string
+  shareFeeConfigId?: string
   shareAdminCapId?: string
   shareTreasuryCapId?: string
   pricingModel: 'nav_per_share' | 'manual_floor' | 'bonding_curve'
@@ -1829,6 +1834,7 @@ function toFundShareSettingsPayload(input: FundShareSettingsInput): Record<strin
     max_daily_mint: input.maxDailyMint || '0',
     mint_paused: input.mintPaused,
     redeem_paused: input.redeemPaused,
+    share_fee_config_id: input.shareFeeConfigId || '',
     notes: input.notes || '',
   }
 }

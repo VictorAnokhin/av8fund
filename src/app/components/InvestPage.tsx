@@ -562,18 +562,22 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
   }, [account?.address, currentOwnerAddress, selectedLinkedWallet?.web3auth, zkLoginWalletAddress]);
 
   const activePools = React.useMemo(() => pools.filter((pool) => pool.active), [pools]);
+  const defaultDepositPool = React.useMemo(() => {
+    return activePools.find((pool) => pool.is_default_deposit) || activePools[0] || null;
+  }, [activePools]);
   const quickPool = React.useMemo(() => {
-    return activePools.find((pool) => pool.pool_object_id === quickPoolObjectId) || activePools[0] || null;
-  }, [activePools, quickPoolObjectId]);
+    return activePools.find((pool) => pool.pool_object_id === quickPoolObjectId) || defaultDepositPool;
+  }, [activePools, defaultDepositPool, quickPoolObjectId]);
   const routePool = React.useMemo(() => {
     const normalized = String(poolObjectId || '').trim().toLowerCase();
     if (!normalized) {
-      return null;
+      return defaultDepositPool;
     }
-    return activePools.find((pool) => pool.pool_object_id.toLowerCase() === normalized || String(pool.id) === normalized) ?? null;
-  }, [activePools, poolObjectId]);
+    return activePools.find((pool) => pool.pool_object_id.toLowerCase() === normalized || String(pool.id) === normalized) ?? defaultDepositPool;
+  }, [activePools, defaultDepositPool, poolObjectId]);
   const selectedPools = routePool ? [routePool] : [];
   const depositCoinType = SUI_FUND_CONFIG.usdcType;
+  const shareFeeConfigId = shareSettings?.share_fee_config_id?.trim() || SUI_FUND_CONFIG.shareFeeConfigId;
   const minDepositAmount = routePool ? routePool.liveMinDepositUsdc ?? BigInt(routePool.min_deposit_usdc || '0') : 0n;
   const requiredAv8Balance = routePool ? BigInt(routePool.min_av8_balance || '0') : 0n;
   const routePoolAv8Stakes = React.useMemo(() => {
@@ -917,12 +921,12 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
       setError('Сначала создайте FundPosition для этого кошелька.');
       return;
     }
-    if (!depositCoinType || !SUI_FUND_CONFIG.navStateId || !SUI_FUND_CONFIG.shareConfigId || !SUI_FUND_CONFIG.shareFeeConfigId || !SUI_FUND_CONFIG.registryId || !SUI_FUND_CONFIG.basketId) {
+    if (!depositCoinType || !SUI_FUND_CONFIG.navStateId || !SUI_FUND_CONFIG.shareConfigId || !shareFeeConfigId || !SUI_FUND_CONFIG.registryId || !SUI_FUND_CONFIG.basketId) {
       setError('Не настроены VITE_SUI_USDC_TYPE / NavState / ShareConfig / ShareFeeConfig / AssetRegistry / Basket.');
       return;
     }
     if (!targetPool.basket_vault_id) {
-      setError('Для пополнения депозита у пула должен быть привязан Basket AssetVault в /admin/pools.');
+      setError('Для default deposit route должен быть привязан Basket AssetVault<USDC> в /admin/pools.');
       return;
     }
     if (!amountUsdc || amountUsdc <= 0n) {
@@ -951,7 +955,7 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
       arguments: [
         tx.object(SUI_FUND_CONFIG.navStateId),
         tx.object(SUI_FUND_CONFIG.shareConfigId),
-        tx.object(SUI_FUND_CONFIG.shareFeeConfigId),
+        tx.object(shareFeeConfigId),
         tx.object(SUI_FUND_CONFIG.registryId),
         tx.object(SUI_FUND_CONFIG.basketId),
         tx.object(targetPool.basket_vault_id),
@@ -1157,7 +1161,7 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
 
   async function handleQuickDeposit() {
     if (!quickPool) {
-      setError('Не найден активный пул с привязанным AssetVault для пополнения депозита.');
+      setError('Не найден default deposit route для пополнения депозита.');
       return;
     }
     const value = parseDecimalAmount(quickAmount, 6);
@@ -1191,7 +1195,7 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
       return;
     }
     const poolAccountingId = getPoolAccountingId(quickPool);
-    if (!SUI_FUND_CONFIG.shareFeeConfigId || !poolAccountingId) {
+    if (!shareFeeConfigId || !poolAccountingId) {
       setError('Не настроены ShareFeeConfig или PoolAccounting для выбранного пула. Создайте их в админке и сохраните object id в БД.');
       return;
     }
@@ -1213,7 +1217,7 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
         arguments: [
           tx.object(SUI_FUND_CONFIG.navStateId),
           tx.object(SUI_FUND_CONFIG.shareConfigId),
-          tx.object(SUI_FUND_CONFIG.shareFeeConfigId),
+          tx.object(shareFeeConfigId),
           tx.object(quickPool.pool_object_id),
           tx.object(poolAccountingId),
           tx.object(positionId),
@@ -1743,6 +1747,17 @@ export function InvestPage({ poolObjectId }: InvestPageProps) {
                       </div>
                     )}
                   </label>
+
+                  <div className="mt-4 rounded-2xl border border-sky-400/18 bg-sky-400/10 p-4">
+                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-100/75">
+                      {quickMode === 'deposit' ? 'Доступно USDC' : 'Доступно AV8'}
+                    </div>
+                    <div className="mt-2 text-2xl font-semibold text-white">
+                      {quickMode === 'deposit'
+                        ? `${formatUnits(balance, 6, 6)} USDC`
+                        : `${formatUnits(av8Balance, AV8_DECIMALS, 6)} AV8`}
+                    </div>
+                  </div>
 
                   <label className="mt-4 block">
                     <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
